@@ -23,7 +23,6 @@ impl fmt::Display for Severity {
 pub enum AttackCategory {
     Injection,
     Protocol,
-    Http,
     Data,
     File,
 }

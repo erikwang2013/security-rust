@@ -1,6 +1,6 @@
+use crate::{AttackCategory, DetectionResult, Detector, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![

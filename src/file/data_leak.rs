@@ -26,21 +26,34 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 fn luhn_valid(pan: &str) -> bool {
-    let digits: Vec<u8> = pan.as_bytes().iter()
-        .filter_map(|b| if b.is_ascii_digit() { Some(b - b'0') } else { None })
+    let digits: Vec<u8> = pan
+        .as_bytes()
+        .iter()
+        .filter_map(|b| {
+            if b.is_ascii_digit() {
+                Some(b - b'0')
+            } else {
+                None
+            }
+        })
         .collect();
     if digits.len() < 13 {
         return false;
     }
-    let sum: u32 = digits.iter().rev().enumerate().map(|(i, &d)| {
-        if i % 2 == 1 {
-            let doubled = d as u32 * 2;
-            if doubled > 9 { doubled - 9 } else { doubled }
-        } else {
-            d as u32
-        }
-    }).sum();
-    sum % 10 == 0
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, &d)| {
+            if i % 2 == 1 {
+                let doubled = d as u32 * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                d as u32
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
 }
 
 pub struct DataLeakDetector;
@@ -51,17 +64,17 @@ impl Detector for DataLeakDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        if let Some(m) = CC_PAN.find(input) {
-            if luhn_valid(m.as_str()) {
-                return Some(DetectionResult {
-                    attack_type: "data_leak".into(),
-                    category: AttackCategory::File,
-                    severity: Severity::Critical,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "Sensitive data leak detected (credit card)".into(),
-                });
-            }
+        if let Some(m) = CC_PAN.find(input)
+            && luhn_valid(m.as_str())
+        {
+            return Some(DetectionResult {
+                attack_type: "data_leak".into(),
+                category: AttackCategory::File,
+                severity: Severity::Critical,
+                matched_pattern: m.as_str().to_string(),
+                offset: m.start(),
+                message: "Sensitive data leak detected (credit card)".into(),
+            });
         }
         for re in PATTERNS.iter() {
             if let Some(m) = re.find(input) {

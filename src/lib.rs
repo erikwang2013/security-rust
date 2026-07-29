@@ -1,8 +1,8 @@
-pub mod result;
-pub mod injection;
-pub mod protocol;
 pub mod data;
 pub mod file;
+pub mod injection;
+pub mod protocol;
+pub mod result;
 pub mod scanner;
 
 pub use result::{AttackCategory, DetectionResult, Severity};

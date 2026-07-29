@@ -72,7 +72,11 @@ fn test_xpath_injection() {
     let results = scanner.scan("' or true() or '");
     assert!(!results.is_empty());
     let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
-    assert!(types.contains(&"xpath_injection"), "Expected xpath_injection in {:?}", types);
+    assert!(
+        types.contains(&"xpath_injection"),
+        "Expected xpath_injection in {:?}",
+        types
+    );
 }
 
 #[test]
@@ -170,7 +174,11 @@ fn test_host_header_attack() {
     let results = scanner.scan("Host: example.com\r\nX-Forwarded-Host: evil.com");
     assert!(!results.is_empty());
     let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
-    assert!(types.contains(&"host_header"), "Expected host_header in {:?}", types);
+    assert!(
+        types.contains(&"host_header"),
+        "Expected host_header in {:?}",
+        types
+    );
 }
 
 #[test]
@@ -179,7 +187,11 @@ fn test_request_smuggling() {
     let results = scanner.scan("Transfer-Encoding: chunked\r\nTransfer-Encoding: identity");
     assert!(!results.is_empty());
     let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
-    assert!(types.contains(&"request_smuggling"), "Expected request_smuggling in {:?}", types);
+    assert!(
+        types.contains(&"request_smuggling"),
+        "Expected request_smuggling in {:?}",
+        types
+    );
 }
 
 #[test]
@@ -219,7 +231,11 @@ fn test_dns_rebinding() {
     let results = scanner.scan("Host: 127.0.0.1");
     assert!(!results.is_empty());
     let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
-    assert!(types.contains(&"dns_rebinding"), "Expected dns_rebinding in {:?}", types);
+    assert!(
+        types.contains(&"dns_rebinding"),
+        "Expected dns_rebinding in {:?}",
+        types
+    );
 }
 
 #[test]
@@ -310,7 +326,11 @@ fn test_data_leak_private_key() {
     let results = scanner.scan("-----BEGIN RSA PRIVATE KEY-----");
     assert!(!results.is_empty());
     let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
-    assert!(types.contains(&"data_leak"), "Expected data_leak in {:?}", types);
+    assert!(
+        types.contains(&"data_leak"),
+        "Expected data_leak in {:?}",
+        types
+    );
 }
 
 #[test]
@@ -388,8 +408,14 @@ fn test_default_covers_all_categories() {
         ("ssrf", "http://169.254.169.254/"),
         ("xxe", "<!ENTITY xxe SYSTEM \"file:///etc/passwd\">"),
         ("header_injection", "test%0d%0aHeader: evil"),
-        ("host_header", "Host: example.com\r\nX-Forwarded-Host: evil.com"),
-        ("request_smuggling", "Transfer-Encoding: chunked\r\nTransfer-Encoding: identity"),
+        (
+            "host_header",
+            "Host: example.com\r\nX-Forwarded-Host: evil.com",
+        ),
+        (
+            "request_smuggling",
+            "Transfer-Encoding: chunked\r\nTransfer-Encoding: identity",
+        ),
         ("open_redirect", "//evil.com"),
         ("cors", "Origin: null"),
         ("websocket", "Upgrade: websocket"),
