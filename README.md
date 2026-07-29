@@ -2,7 +2,7 @@
 
 # security-rust
 
-[English](#english) | **中文**
+[English](./README.en.md) | **中文**
 
 Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据泄露 4 大类共 27 个检测器。零外部框架依赖，纯字符串扫描。
 
