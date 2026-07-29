@@ -1,3 +1,5 @@
+// Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
+
 pub mod command_injection;
 pub mod graphql_injection;
 pub mod jndi_injection;

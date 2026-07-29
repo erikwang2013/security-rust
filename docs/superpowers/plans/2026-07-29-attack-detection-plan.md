@@ -1,8 +1,10 @@
+<!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
+
 # Attack Detection Library — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a pure Rust attack detection library with 27 detectors across 5 categories, consuming string input and returning structured `DetectionResult` values.
+**Goal:** Build a pure Rust attack detection library with 27 detectors across 4 categories, consuming string input and returning structured `DetectionResult` values.
 
 **Architecture:** Single crate with `Detector` trait as the common interface. Each detector is a struct holding compiled regex patterns. A `Scanner` aggregates all detectors and runs them in sequence, returning all matches. Builder pattern for optional configuration.
 
@@ -58,7 +60,6 @@ impl fmt::Display for Severity {
 pub enum AttackCategory {
     Injection,
     Protocol,
-    Http,
     Data,
     File,
 }
@@ -119,7 +120,7 @@ Expected: Compiles
 
 Scanner holds `Vec<Box<dyn Detector>>`, provides `default()`, `builder()`, `scan()`, `scan_with()`.
 
-ScannerBuilder supports: `with_detector()`, `allowed_methods()`, `max_body_size()`, `allowed_content_types()`, `csrf_origins()`, `ip_ban_threshold()`, `ip_ban_window_secs()`, `ip_ban_duration_secs()`, `allowed_extensions()`, `build()`.
+ScannerBuilder supports: `with_detector()`, `build()`.
 
 - [ ] **Step 2: Update lib.rs** — add `pub mod scanner; pub use scanner::{Scanner, ScannerBuilder};`
 

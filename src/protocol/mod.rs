@@ -1,3 +1,5 @@
+// Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
+
 pub mod cors;
 pub mod dns_rebinding;
 pub mod header_injection;

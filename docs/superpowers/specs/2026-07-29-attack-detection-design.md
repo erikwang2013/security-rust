@@ -1,15 +1,17 @@
+<!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
+
 # Attack Detection Library — Design Spec
 
 ## Overview
 
-纯 Rust 攻击检测库，输入字符串 → 输出结构化检测结果。覆盖注入攻击、协议攻击、HTTP 校验、数据/序列化攻击、文件/敏感数据 5 大类共 27 个检测器。
+纯 Rust 攻击检测库，输入字符串 → 输出结构化检测结果。覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据 4 大类共 27 个检测器。
 
 ## Core Types
 
 ```rust
 pub enum Severity { Critical, High, Medium, Low }
 
-pub enum AttackCategory { Injection, Protocol, Data, File, Http }
+pub enum AttackCategory { Injection, Protocol, Data, File }
 
 pub struct DetectionResult {
     pub attack_type: String,
@@ -127,28 +129,27 @@ src/
 pub struct Scanner { detectors: Vec<Box<dyn Detector>> }
 
 impl Scanner {
-    pub fn default() -> Self;
+    pub fn new() -> Self;
     pub fn builder() -> ScannerBuilder;
     pub fn scan(&self, input: &str) -> Vec<DetectionResult>;
     pub fn scan_with(&self, input: &str, names: &[&str]) -> Vec<DetectionResult>;
 }
 ```
 
+Scanner 实现了 `Default` trait，`Scanner::default()` 返回预装全部 27 个检测器的实例。
+
 ## Builder Configuration
 
 ```rust
+use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+
 let scanner = Scanner::builder()
-    .allowed_methods(&["GET", "POST", "PUT", "DELETE"])
-    .max_body_size(10 * 1024 * 1024)       // 10MB
-    .allowed_content_types(&["application/json", "text/plain"])
-    .csrf_origins(&["https://example.com"])
-    .ip_ban_threshold(5)
-    .ip_ban_window_secs(60)
-    .ip_ban_duration_secs(900)
-    .ip_storage(IpStorageBackend::File("/tmp/banlist.json"))
-    .allowed_extensions(&["jpg", "png", "pdf"])
-    .build()?;
+    .with_detector(Box::new(XssDetector))
+    .with_detector(Box::new(SqlInjectionDetector))
+    .build();
 ```
+
+`ScannerBuilder` 支持通过 `with_detector()` 选择性装配检测器，适用于只需要部分检测能力的场景。
 
 ## Dependencies
 
@@ -160,5 +161,4 @@ let scanner = Scanner::builder()
 
 - 不绑定特定 Web 框架
 - 不做 HTTP 请求/响应解析
-- 不做 IP 存储后端的网络实现（File backend only for MVP）
 - 不做实时防护/阻断，只做检测

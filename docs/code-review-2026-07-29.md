@@ -1,3 +1,5 @@
+<!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
+
 # 代码审查报告 — attack-detection
 
 **日期**: 2026-07-29  

@@ -1,8 +1,10 @@
+<!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
+
 # attack-detection
 
 [English](#english) | **中文**
 
-Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据泄露 5 大类共 27 个检测器。零外部框架依赖，纯字符串扫描。
+Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据泄露 4 大类共 27 个检测器。零外部框架依赖，纯字符串扫描。
 
 ---
 
@@ -17,7 +19,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 - **单一职责** — 每个检测器只管一种攻击类型，内部持有编译好的正则模式集
 - **统一接口** — `Detector` trait 是所有检测器的唯一契约：`fn detect(&self, input: &str) -> Option<DetectionResult>`
 - **默认覆盖** — `Scanner::default()` 一键装配全部 27 个检测器，零配置可用
-- **可选配置** — `Scanner::builder()` 支持按需定制（HTTP 方法白名单、body 大小上限、IP 封禁阈值等）
+- **可选配置** — `Scanner::builder()` 支持按需定制，通过 `.with_detector()` 选择性装配检测器
 
 ### 权衡
 
@@ -32,33 +34,34 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 ## 设计架构
 
 ```
-                    ┌─────────────────────────┐
-                    │      Scanner             │
-                    │  ┌───────────────────┐   │
-                    │  │ scan(input)       │   │     Vec<DetectionResult>
- user input ────────►│  │ scan_with(input,  │───►──────────────────────►
-                    │  │   &["xss","sql"]) │   │
-                    │  └───────┬───────────┘   │
-                    │          │                │
-                    │  ┌───────▼───────────┐   │
-                    │  │ Vec<Box<Detector>>│   │
-                    │  │  ├─ XssDetector   │   │
-                    │  │  ├─ SqlDetector   │   │
-                    │  │  ├─ ...×27        │   │
-                    │  └───────────────────┘   │
-                    └─────────────────────────┘
-
-   Detector trait
-   ┌─────────────────────────────────────────────┐
-   │  fn name(&self) -> &'static str             │
-   │  fn detect(&self, &str) -> Option<Result>   │
-   └─────────────────────────────────────────────┘
-           ▲          ▲          ▲          ▲
-           │          │          │          │
-   ┌───────┴──┐ ┌─────┴───┐ ┌───┴────┐ ┌──┴──────┐
-   │injection/│ │protocol/│ │ data/  │ │  file/  │
-   │  10 个   │ │  9 个   │ │  5 个  │ │  3 个   │
-   └──────────┘ └─────────┘ └────────┘ └─────────┘
+                       ┌──────────────────────────────────┐
+                       │             Scanner              │
+                       │  ┌────────────────────────────┐  │
+    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
+                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
+                       │  └─────────────┬──────────────┘  │
+                       │                │                  │
+                       │  ┌─────────────▼──────────────┐  │
+                       │  │   Vec<Box<dyn Detector>>   │  │
+                       │  │   ├─ XssDetector           │  │
+                       │  │   ├─ SqlInjectionDetector  │  │
+                       │  │   ├─ ... ×27               │  │
+                       │  └────────────────────────────┘  │
+                       └──────────────┬───────────────────┘
+                                      │
+       ┌──────────────────────────────┐
+       │       Detector trait         │
+       │  fn name(&self) -> &str      │
+       │  fn detect(&self, &str)      │
+       │       -> Option<Result>      │
+       └──────────────┬───────────────┘
+                      │
+       ┌──────────────┼──────────────┐
+       │              │              │
+  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
+  │injection│  │  protocol   │  │  data  │  │  file   │
+  │  10 个  │  │   9 个      │  │ 5 个   │  │  3 个   │
+  └─────────┘  └─────────────┘  └────────┘  └─────────┘
 ```
 
 ### 模块职责
@@ -76,7 +79,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 ```rust
 pub struct DetectionResult {
     pub attack_type: String,      // "xss", "sql_injection" ...
-    pub category: AttackCategory, // Injection | Protocol | Data | File | Http
+    pub category: AttackCategory, // Injection | Protocol | Data | File
     pub severity: Severity,       // Critical | High | Medium | Low
     pub matched_pattern: String,  // 匹配到的具体模式片段
     pub offset: usize,            // 输入中的字节偏移
@@ -182,14 +185,12 @@ let results = scanner.scan_with(
 ### 自定义配置
 
 ```rust
+use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+
+// 通过 builder 只装配需要的检测器
 let scanner = Scanner::builder()
-    .allowed_methods(&["GET", "POST"])
-    .max_body_size(5 * 1024 * 1024)       // 5MB
-    .allowed_content_types(&["application/json"])
-    .ip_ban_threshold(3)                    // 3 次攻击触发封禁
-    .ip_ban_window_secs(30)                 // 30 秒窗口
-    .ip_ban_duration_secs(600)              // 封禁 10 分钟
-    .allowed_extensions(&["jpg", "png", "pdf", "docx"])
+    .with_detector(Box::new(XssDetector))
+    .with_detector(Box::new(SqlInjectionDetector))
     .build();
 ```
 
@@ -236,26 +237,16 @@ cargo clippy -- -D warnings
 
 ## 许可
 
-MIT
+MIT — Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 ---
 
 ## English
 
-*This section provides a brief English overview.*
+**Full English documentation is available at [README.en.md](./README.en.md).**
 
-A pure Rust attack detection library with 27 detectors across 5 categories. Zero framework dependencies — just `regex` and `thiserror`.
+A pure Rust attack detection library with 27 detectors across 4 categories. Zero framework dependencies — just `regex` and `thiserror`.
 
 **Categories:** Injection (10), Protocol (9), Data (5), File (3).
 
-**Usage:**
-
-```rust
-use attack_detection::Scanner;
-
-let scanner = Scanner::default();
-let results = scanner.scan("<script>alert(1)</script>");
-assert_eq!(results[0].attack_type, "xss");
-```
-
-**Full documentation is available in Chinese above.** Key API surfaces are in English (type names, method names, error messages).
+Key API surfaces are in English (type names, method names, error messages).
