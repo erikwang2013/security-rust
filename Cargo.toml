@@ -1,7 +1,7 @@
 # Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 [package]
-name = "attack-detection"
+name = "security-rust"
 version = "1.0.2"
 edition = "2024"
 description = "A pure Rust attack detection library with 27 detectors across 4 categories — injection, protocol, data, and file attacks. Zero framework dependencies."
