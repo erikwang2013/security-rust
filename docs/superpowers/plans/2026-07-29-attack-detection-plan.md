@@ -23,7 +23,7 @@
 
 ```toml
 [package]
-name = "attack-detection"
+name = "security-rust"
 version = "0.1.0"
 edition = "2024"
 

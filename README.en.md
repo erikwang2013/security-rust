@@ -1,6 +1,6 @@
 <!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
 
-# attack-detection
+# security-rust
 
 [中文](./README.md) | **English**
 

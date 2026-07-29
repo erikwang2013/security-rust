@@ -2,13 +2,13 @@
 
 [package]
 name = "security-rust"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2024"
 description = "A pure Rust attack detection library with 27 detectors across 4 categories — injection, protocol, data, and file attacks. Zero framework dependencies."
 license = "MIT"
 repository = "https://github.com/erikwang2013/security-rust"
 authors = ["erik <erik@erik.xyz>"]
-keywords = ["security", "attack-detection", "xss", "sql-injection", "waf"]
+keywords = ["security", "security-rust", "xss", "sql-injection", "waf"]
 categories = ["security", "parsing"]
 
 [dependencies]

@@ -1,6 +1,6 @@
 <!-- Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz -->
 
-# attack-detection
+# security-rust
 
 [English](#english) | **中文**
 
@@ -146,7 +146,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-attack-detection = { path = "." }
+security-rust = { path = "." }
 ```
 
 ### 快速开始
