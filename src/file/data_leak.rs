@@ -23,7 +23,6 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)postgres(?:ql)?://[^/\s]+").unwrap(),
         Regex::new(r"(?i)redis://[^/\s]+").unwrap(),
         Regex::new(r"(?i)jdbc:[a-z]+://").unwrap(),
-        Regex::new(r"(?i)eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+").unwrap(),
     ]
 });
 

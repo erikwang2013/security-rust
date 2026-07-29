@@ -13,10 +13,6 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)\$\{env:").unwrap(),
         Regex::new(r"(?i)\$\{sys:").unwrap(),
         Regex::new(r"(?i)\$\{java:").unwrap(),
-        Regex::new(r"(?i)ldap://").unwrap(),
-        Regex::new(r"(?i)rmi://").unwrap(),
-        Regex::new(r"(?i)dns://").unwrap(),
-        Regex::new(r"(?i)ldaps://").unwrap(),
     ]
 });
 

@@ -9,8 +9,6 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r"(?i)Transfer-Encoding:.*\r\n.*Transfer-Encoding:").unwrap(),
         Regex::new(r"(?i)Transfer-Encoding:[\s]*chunked").unwrap(),
-        Regex::new(r"(?i)Content-Length:[\s]*0").unwrap(),
-        Regex::new(r"(?i)\r\n0\r\n").unwrap(),
     ]
 });
 
