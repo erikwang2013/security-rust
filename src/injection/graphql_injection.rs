@@ -7,7 +7,7 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)__schema").unwrap(),
         Regex::new(r"(?i)__type\s*\{").unwrap(),
         Regex::new(r"(?i)__typename").unwrap(),
-        Regex::new(r"\{[\s\n]*\{[\s\n]*\{[\s\n]*\{[\s\n]*\{").unwrap(),
+        Regex::new(r"\{[^{}]*\{[^{}]*\{[^{}]*\{[^{}]*\{").unwrap(),
     ]
 });
 

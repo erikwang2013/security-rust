@@ -6,7 +6,7 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity};
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r"(?i)%0[dD]%0[aA]").unwrap(),
-        Regex::new(r"(?i)\r\n").unwrap(),
+        Regex::new(r"(?i)\r\n\s*(?:Set-Cookie|Location|Content-Length|Content-Type|Transfer-Encoding):").unwrap(),
         Regex::new(r"(?i)%0[dD].*%0[aA]").unwrap(),
     ]
 });

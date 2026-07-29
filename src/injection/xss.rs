@@ -5,7 +5,7 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity};
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r"(?i)<script[\s/>]").unwrap(),
-        Regex::new(r"(?i)on[a-z]+\s*=").unwrap(),
+        Regex::new(r"(?i)on(?:error|load|click|mouse(?:over|out|down|up|move)|key(?:down|up|press)|focus|blur|change|submit|reset|scroll|resize|abort|select|start|drag|drop|play|pause|ended|volumechange|animationstart|animationend|transitionend|touchstart|touchend|pointerdown|pointerup|wheel|auxclick|canplay|canplaythrough|close|cuechange|dblclick|durationchange|emptied|fullscreenchange|gotpointercapture|input|invalid|loadeddata|loadedmetadata|loadstart|lostpointercapture|offline|online|pagehide|pageshow|popstate|progress|ratechange|securitypolicyviolation|seeked|seeking|show|stalled|suspend|timeupdate|toggle|waiting)\s*=").unwrap(),
         Regex::new(r"(?i)javascript\s*:").unwrap(),
         Regex::new(r"(?i)<svg[\s/>]").unwrap(),
         Regex::new(r"(?i)expression\s*\(").unwrap(),

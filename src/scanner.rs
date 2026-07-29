@@ -77,20 +77,28 @@ impl Scanner {
 #[derive(Default)]
 pub struct ScannerBuilder {
     detectors: Vec<Box<dyn Detector>>,
+    /// Reserved: HTTP method whitelist (http_method detector)
     #[allow(dead_code)]
     allowed_methods: Vec<String>,
+    /// Reserved: max request body size (body_size detector)
     #[allow(dead_code)]
     max_body_size: usize,
+    /// Reserved: allowed Content-Type values (content_type detector)
     #[allow(dead_code)]
     allowed_content_types: Vec<String>,
+    /// Reserved: cross-origin whitelist (csrf_origin detector)
     #[allow(dead_code)]
     csrf_origins: Vec<String>,
+    /// Reserved: attacks before IP ban (ip_blacklist detector)
     #[allow(dead_code)]
     ip_ban_threshold: u32,
+    /// Reserved: IP ban window in seconds
     #[allow(dead_code)]
     ip_ban_window_secs: u64,
+    /// Reserved: IP ban duration in seconds
     #[allow(dead_code)]
     ip_ban_duration_secs: u64,
+    /// Reserved: allowed file extensions (upload detector)
     #[allow(dead_code)]
     allowed_extensions: Vec<String>,
 }
