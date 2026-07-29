@@ -152,7 +152,7 @@ attack-detection = { path = "." }
 ### 快速开始
 
 ```rust
-use attack_detection::Scanner;
+use security_rust::Scanner;
 
 fn main() {
     // 零配置：装配全部 27 个检测器
@@ -185,7 +185,7 @@ let results = scanner.scan_with(
 ### 自定义配置
 
 ```rust
-use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+use security_rust::injection::{XssDetector, SqlInjectionDetector};
 
 // 通过 builder 只装配需要的检测器
 let scanner = Scanner::builder()
@@ -197,7 +197,7 @@ let scanner = Scanner::builder()
 ### 只装配部分检测器
 
 ```rust
-use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+use security_rust::injection::{XssDetector, SqlInjectionDetector};
 
 let scanner = Scanner::builder()
     .with_detector(Box::new(XssDetector))
@@ -208,7 +208,7 @@ let scanner = Scanner::builder()
 ### 严重度展示
 
 ```rust
-use attack_detection::Severity;
+use security_rust::Severity;
 
 let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use attack_detection::{Scanner, Severity};
+use security_rust::{Scanner, Severity};
 
 #[test]
 fn test_xss_script_tag() {

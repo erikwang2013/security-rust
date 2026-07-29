@@ -145,7 +145,7 @@ pub struct DetectionResult {
 ### Quick Start
 
 ```rust
-use attack_detection::Scanner;
+use security_rust::Scanner;
 
 fn main() {
     // Zero config: all 27 detectors pre-assembled
@@ -178,7 +178,7 @@ let results = scanner.scan_with(
 ### Custom Configuration
 
 ```rust
-use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+use security_rust::injection::{XssDetector, SqlInjectionDetector};
 
 // Build a scanner with only the detectors you need
 let scanner = Scanner::builder()
@@ -190,7 +190,7 @@ let scanner = Scanner::builder()
 ### Severity Display
 
 ```rust
-use attack_detection::Severity;
+use security_rust::Severity;
 
 let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW

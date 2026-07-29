@@ -141,7 +141,7 @@ Scanner 实现了 `Default` trait，`Scanner::default()` 返回预装全部 27 �
 ## Builder Configuration
 
 ```rust
-use attack_detection::injection::{XssDetector, SqlInjectionDetector};
+use security_rust::injection::{XssDetector, SqlInjectionDetector};
 
 let scanner = Scanner::builder()
     .with_detector(Box::new(XssDetector))
