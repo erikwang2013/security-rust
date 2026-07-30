@@ -146,7 +146,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = { path = "." }
+security-rust = "1.0.4"
 ```
 
 ### 快速开始
@@ -188,17 +188,6 @@ let results = scanner.scan_with(
 use security_rust::injection::{XssDetector, SqlInjectionDetector};
 
 // 通过 builder 只装配需要的检测器
-let scanner = Scanner::builder()
-    .with_detector(Box::new(XssDetector))
-    .with_detector(Box::new(SqlInjectionDetector))
-    .build();
-```
-
-### 只装配部分检测器
-
-```rust
-use security_rust::injection::{XssDetector, SqlInjectionDetector};
-
 let scanner = Scanner::builder()
     .with_detector(Box::new(XssDetector))
     .with_detector(Box::new(SqlInjectionDetector))

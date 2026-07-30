@@ -150,7 +150,7 @@ Any string works as a custom agent type.
 - ALWAYS verify build succeeds before committing
 
 ```bash
-npm run build && npm test
+cargo build --release && cargo test
 ```
 
 ## CLI Quick Reference

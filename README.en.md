@@ -142,6 +142,13 @@ pub struct DetectionResult {
 
 ## Usage
 
+### Installation
+
+```toml
+[dependencies]
+security-rust = "1.0.4"
+```
+
 ### Quick Start
 
 ```rust

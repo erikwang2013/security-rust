@@ -198,7 +198,8 @@ Patterns: `'\s*or\s*'1'\s*=\s*'1`, `'\s*and\s*'1'\s*=\s*'2`, `'\s*or\s*1\s*=\s*1
 - Create: `src/injection/jndi_injection.rs`
 - Modify: `src/injection/mod.rs`
 
-Patterns: `\$\{jndi:`, `\$\{lower:j\}`, `\$\{upper:j\}`, `\$\{::-j\}`, `\$\{env:`, `\$\{sys:`, `\$\{java:`, `ldap://`, `rmi://`, `dns://`
+Patterns: `\$\{jndi:`, `\$\{lower:j\}`, `\$\{upper:j\}`, `\$\{::-j\}`, `\$\{env:`, `\$\{sys:`, `\$\{java:}`
+<!-- v1.0.4: ldap://, rmi://, dns:// removed — 裸协议模式已被 ${jndi:...} 精确匹配覆盖，避免误报 -->
 
 ---
 
