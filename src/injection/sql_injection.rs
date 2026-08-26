@@ -49,3 +49,85 @@ impl Detector for SqlInjectionDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn det() -> SqlInjectionDetector {
+        SqlInjectionDetector
+    }
+
+    fn assert_hit(input: &str) {
+        let r = det()
+            .detect(input)
+            .expect("expected SQL injection detection");
+        assert_eq!(r.attack_type, "sql_injection");
+        assert_eq!(r.category, AttackCategory::Injection);
+        assert_eq!(r.severity, Severity::Critical);
+        assert!(!r.matched_pattern.is_empty(), "matched_pattern empty");
+        assert!(
+            r.offset <= input.len(),
+            "offset {} > len {}",
+            r.offset,
+            input.len()
+        );
+    }
+
+    #[test]
+    fn name_is_sql_injection() {
+        assert_eq!(det().name(), "sql_injection");
+    }
+
+    #[test]
+    fn detects_common_payloads() {
+        for input in [
+            "1 UNION SELECT password FROM users",
+            "1; SELECT pg_sleep(5)",
+            "admin' OR '1'='1",
+            "SELECT * FROM users WHERE id=1",
+            "id=1 /*!50000union select*/",
+            "1; WAITFOR DELAY '0:0:5'",
+            "username' OR 1=1 --",
+        ] {
+            assert_hit(input);
+        }
+    }
+
+    #[test]
+    fn benign_inputs_not_detected() {
+        for input in [
+            "Hello, this is a normal text input. Nothing suspicious here.",
+            "Please choose an option below",
+            "I will sleep well tonight",
+            "The benchmark results look great",
+            "Drop me a line when you arrive",
+            "The information desk is on the second floor",
+        ] {
+            assert!(det().detect(input).is_none(), "false positive: {input}");
+        }
+    }
+
+    #[test]
+    fn edge_cases() {
+        assert!(det().detect("").is_none());
+        assert!(det().detect(" \t\n ").is_none());
+        assert!(det().detect("你好世界 こんにちは").is_none());
+        // near misses: keyword present but not the payload form
+        assert!(det().detect("UNOIN SILE CT *").is_none());
+        assert!(det().detect("select from users").is_none());
+        assert!(det().detect("sleep 5").is_none());
+    }
+
+    #[test]
+    fn obfuscated_variants_detected() {
+        for input in [
+            "1 UnIoN SeLeCt password",
+            "Sleep(5)",
+            "1; SELECT Pg_Sleep(10)",
+            "' or '1'='1",
+        ] {
+            assert_hit(input);
+        }
+    }
+}

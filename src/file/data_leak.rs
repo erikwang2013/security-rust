@@ -92,3 +92,144 @@ impl Detector for DataLeakDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AttackCategory, Detector, Severity};
+
+    #[test]
+    fn name_returns_attack_type() {
+        assert_eq!(DataLeakDetector.name(), "data_leak");
+    }
+
+    #[test]
+    fn detects_valid_credit_cards() {
+        for payload in ["4111111111111111", "4242424242424242", "5555555555554444"] {
+            let r = DataLeakDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert_eq!(r.attack_type, "data_leak");
+            assert_eq!(r.category, AttackCategory::File);
+            assert_eq!(r.severity, Severity::Critical);
+            assert_eq!(r.matched_pattern, payload);
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn detects_cloud_and_api_keys() {
+        for payload in [
+            "AKIAIOSFODNN7EXAMPLE",
+            "AWS_ACCESS_KEY=AKIA1234567890ABCDEF",
+            "sk-abcdefghijklmnopqrstuvwxyz123456",
+            "key=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh",
+        ] {
+            let r = DataLeakDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn detects_private_keys_and_certificates() {
+        for payload in [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN DSA PRIVATE KEY-----",
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+            "-----BEGIN CERTIFICATE-----",
+        ] {
+            let r = DataLeakDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn detects_database_connection_strings() {
+        for payload in [
+            "mongodb://admin:password@localhost:27017/db",
+            "mongodb+srv://admin@cluster.example.com/db",
+            "mysql://root:secret@db:3306/app",
+            "postgresql://user:pass@pg:5432/db",
+            "postgres://user:pass@pg:5432/db",
+            "redis://:secret@cache:6379/0",
+            "jdbc:mysql://localhost:3306/app",
+        ] {
+            let r = DataLeakDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_benign_inputs() {
+        for input in [
+            "Hello, this is a normal text input.",
+            "4111111111111112",
+            "AKIA",
+            "AKIAIOSFODNN7EXAMPL",
+            "sk-ab",
+            "-----BEGIN PUBLIC KEY-----",
+            "mongodb",
+            "mysql://",
+            "redis://",
+            "https://example.com/db",
+            "jdbc:mysql:thin@localhost",
+        ] {
+            assert!(
+                DataLeakDetector.detect(input).is_none(),
+                "false positive: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn edge_cases() {
+        assert!(DataLeakDetector.detect("").is_none());
+        assert!(DataLeakDetector.detect("   ").is_none());
+        assert!(DataLeakDetector.detect("カード番号は秘密です").is_none());
+        assert!(
+            DataLeakDetector
+                .detect("card 4111 1111 1111 1111")
+                .is_none()
+        ); // spaced digits
+    }
+}

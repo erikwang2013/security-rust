@@ -44,3 +44,96 @@ impl Detector for SsrfDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_detected(input: &str) {
+        let r = SsrfDetector.detect(input).expect("expected ssrf detection");
+        assert_eq!(r.attack_type, "ssrf");
+        assert_eq!(r.category, AttackCategory::Protocol);
+        assert_eq!(r.severity, Severity::Critical);
+        assert!(!r.matched_pattern.is_empty());
+        assert!(r.offset <= input.len());
+        assert_eq!(
+            &input[r.offset..r.offset + r.matched_pattern.len()],
+            r.matched_pattern
+        );
+        assert!(!r.message.is_empty());
+    }
+
+    fn assert_clean(input: &str) {
+        assert!(
+            SsrfDetector.detect(input).is_none(),
+            "not detected: {input:?}"
+        );
+    }
+
+    #[test]
+    fn name_is_ssrf() {
+        assert_eq!(SsrfDetector.name(), "ssrf");
+    }
+
+    #[test]
+    fn detects_cloud_metadata_ip() {
+        assert_detected("http://169.254.169.254/latest/meta-data/");
+    }
+
+    #[test]
+    fn detects_internal_ipv4() {
+        assert_detected("http://10.0.0.1/admin");
+    }
+
+    #[test]
+    fn detects_private_ranges() {
+        assert_detected("http://192.168.1.1/");
+        assert_detected("http://172.16.0.1/");
+        assert_detected("http://172.31.255.255/");
+        assert_detected("http://127.0.0.1:8080/");
+        assert_detected("http://0.0.0.0/");
+        assert_detected("http://[::1]/");
+    }
+
+    #[test]
+    fn detects_ssrf_uri_schemes() {
+        assert_detected("gopher://evil.com/_GET / HTTP/1.1");
+        assert_detected("dict://evil.com:11211/");
+        assert_detected("ftp://user@evil.com/file");
+        assert_detected("file:///etc/passwd");
+    }
+
+    #[test]
+    fn detects_mixed_case_schemes() {
+        assert_detected("GOPHER://evil.com/");
+        assert_detected("FILE:///etc/shadow");
+    }
+
+    #[test]
+    fn rejects_public_hosts() {
+        assert_clean("http://example.com/index.html");
+        assert_clean("https://github.com/security-rust");
+        assert_clean("http://172.32.0.1/");
+        assert_clean("http://8.8.8.8/dns");
+    }
+
+    #[test]
+    fn rejects_near_misses() {
+        assert_clean("http://10.0.0/admin");
+        assert_clean("http://169.254.169/admin");
+        assert_clean("ftp://evil.com/pub");
+        assert_clean("http://192.168/admin");
+    }
+
+    #[test]
+    fn rejects_empty_and_whitespace() {
+        assert_clean("");
+        assert_clean("   ");
+        assert_clean("\t\n");
+    }
+
+    #[test]
+    fn rejects_unicode_text() {
+        assert_clean("你好，世界！这是一个正常的中文文本。");
+    }
+}

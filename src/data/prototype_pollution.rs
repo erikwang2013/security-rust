@@ -40,3 +40,92 @@ impl Detector for PrototypePollutionDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AttackCategory, Detector, Severity};
+
+    #[test]
+    fn name_returns_attack_type() {
+        assert_eq!(PrototypePollutionDetector.name(), "prototype_pollution");
+    }
+
+    #[test]
+    fn detects_proto_and_constructor_payloads() {
+        for payload in [
+            r#"{"__proto__": {"isAdmin": true}}"#,
+            r#"{"__proto__": {"polluted": true}}"#,
+            "obj.constructor.prototype.isAdmin = true",
+            "a[constructor[0]]",
+            "o[__proto__][isAdmin]",
+        ] {
+            let r = PrototypePollutionDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert_eq!(r.attack_type, "prototype_pollution");
+            assert_eq!(r.category, AttackCategory::Data);
+            assert_eq!(r.severity, Severity::High);
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn detects_legacy_getter_setter_apis() {
+        for payload in [
+            "__defineGetter__('x', fn)",
+            "__defineSetter__('x', fn)",
+            "__lookupGetter__('x')",
+            "__lookupSetter__('x')",
+            "hasOwnProperty['isAdmin']",
+        ] {
+            let r = PrototypePollutionDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_benign_inputs() {
+        for input in [
+            "Hello, this is a normal text input.",
+            "constructor",
+            "hasOwnProperty",
+            "proto",
+            "the prototype chain is a concept",
+        ] {
+            assert!(
+                PrototypePollutionDetector.detect(input).is_none(),
+                "false positive: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn edge_cases() {
+        assert!(PrototypePollutionDetector.detect("").is_none());
+        assert!(PrototypePollutionDetector.detect("   ").is_none());
+        assert!(PrototypePollutionDetector.detect("＿＿proto＿＿").is_none()); // fullwidth underscores
+        assert!(PrototypePollutionDetector.detect("Прототип").is_none());
+    }
+}

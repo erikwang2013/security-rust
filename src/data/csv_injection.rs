@@ -36,3 +36,68 @@ impl Detector for CsvInjectionDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AttackCategory, Detector, Severity};
+
+    #[test]
+    fn name_returns_attack_type() {
+        assert_eq!(CsvInjectionDetector.name(), "csv_injection");
+    }
+
+    #[test]
+    fn detects_formula_prefixes() {
+        for payload in [
+            "=cmd|' /C calc'!A0",
+            "+1+1",
+            "-2+3",
+            "@SUM(1+1)*cmd",
+            "\t=1",
+            "DDE;cmd",
+            "cmd|' /C calc'!A0",
+        ] {
+            let r = CsvInjectionDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert_eq!(r.attack_type, "csv_injection");
+            assert_eq!(r.category, AttackCategory::Data);
+            assert_eq!(r.severity, Severity::Medium);
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_benign_inputs() {
+        for input in [
+            "Hello, this is a normal text input.",
+            "a=1+1",
+            "SUM(1+1)",
+            "cmd /C calc",
+            "not a formula",
+        ] {
+            assert!(
+                CsvInjectionDetector.detect(input).is_none(),
+                "false positive: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn edge_cases() {
+        assert!(CsvInjectionDetector.detect("").is_none());
+        assert!(CsvInjectionDetector.detect("   ").is_none());
+        assert!(CsvInjectionDetector.detect("＝cmd|' /C calc'!A0").is_none()); // fullwidth equals
+    }
+}

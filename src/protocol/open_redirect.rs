@@ -42,3 +42,95 @@ impl Detector for OpenRedirectDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_detected(input: &str) {
+        let r = OpenRedirectDetector
+            .detect(input)
+            .expect("expected open_redirect detection");
+        assert_eq!(r.attack_type, "open_redirect");
+        assert_eq!(r.category, AttackCategory::Protocol);
+        assert_eq!(r.severity, Severity::Medium);
+        assert!(!r.matched_pattern.is_empty());
+        assert!(r.offset <= input.len());
+        assert_eq!(
+            &input[r.offset..r.offset + r.matched_pattern.len()],
+            r.matched_pattern
+        );
+        assert!(!r.message.is_empty());
+    }
+
+    fn assert_clean(input: &str) {
+        assert!(
+            OpenRedirectDetector.detect(input).is_none(),
+            "not detected: {input:?}"
+        );
+    }
+
+    #[test]
+    fn name_is_open_redirect() {
+        assert_eq!(OpenRedirectDetector.name(), "open_redirect");
+    }
+
+    #[test]
+    fn detects_double_slash_url() {
+        assert_detected("//evil.com/phishing");
+        assert_detected("//attacker.org/steal?u=1");
+    }
+
+    #[test]
+    fn detects_javascript_uri() {
+        assert_detected("javascript:alert(document.cookie)");
+    }
+
+    #[test]
+    fn detects_data_html_uri() {
+        assert_detected("data:text/html,<script>alert(1)</script>");
+    }
+
+    #[test]
+    fn detects_data_plain_uri() {
+        assert_detected("data: text/plain;base64,SGVsbG8=");
+    }
+
+    #[test]
+    fn detects_mixed_case() {
+        assert_detected("JAVASCRIPT:alert(1)");
+        assert_detected("//Evil.Com/");
+    }
+
+    #[test]
+    fn rejects_scheme_urls() {
+        assert_clean("https://evil.com/phishing");
+        assert_clean("http://example.com/");
+        assert_clean("file:///etc/passwd");
+    }
+
+    #[test]
+    fn rejects_benign_paths() {
+        assert_clean("example.com/redirect");
+        assert_clean("java script: alert(1)");
+        assert_clean("data:image/png;base64,AA==");
+    }
+
+    #[test]
+    fn rejects_near_misses() {
+        assert_clean("//evil/com");
+        assert_clean("//evil.c");
+        assert_clean("// evil.com");
+    }
+
+    #[test]
+    fn rejects_empty_and_whitespace() {
+        assert_clean("");
+        assert_clean("   ");
+    }
+
+    #[test]
+    fn rejects_unicode_text() {
+        assert_clean("重定向到登录页");
+    }
+}

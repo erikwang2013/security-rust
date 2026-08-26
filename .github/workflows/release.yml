@@ -1,0 +1,39 @@
+name: Auto Release
+
+# 推送规则：push 到 main 后，读取 Cargo.toml 最新版本，
+# 若对应 tag/release 尚不存在则增量创建（已存在则跳过）。
+# 不打包应用 —— 仅 tag + release notes。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read latest version from Cargo.toml
+        id: version
+        run: echo "tag=v$(grep -m1 '^version' Cargo.toml | cut -d'\"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and release (incremental)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists — skip (incremental)"
+            exit 0
+          fi
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+          gh release create "${TAG}" \
+            --title "security-rust ${TAG}" \
+            --generate-notes

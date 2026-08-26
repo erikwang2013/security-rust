@@ -38,3 +38,95 @@ impl Detector for MailHeaderDetector {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AttackCategory, Detector, Severity};
+
+    #[test]
+    fn name_returns_attack_type() {
+        assert_eq!(MailHeaderDetector.name(), "mail_header");
+    }
+
+    #[test]
+    fn detects_injected_recipient_headers() {
+        for payload in [
+            "Bcc: victim@evil.com",
+            "Cc: victim@evil.com",
+            "bcc: lower@case.com",
+        ] {
+            let r = MailHeaderDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert_eq!(r.attack_type, "mail_header");
+            assert_eq!(r.category, AttackCategory::Data);
+            assert_eq!(r.severity, Severity::Medium);
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn detects_double_from_and_mime_headers() {
+        for payload in [
+            "From: a@b.c\nFrom: c@d.e",
+            "From: a@b.c\r\nFrom: c@d.e",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed; boundary=abc123",
+            "boundary=abc123",
+        ] {
+            let r = MailHeaderDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert!(
+                !r.matched_pattern.is_empty(),
+                "matched_pattern empty for {:?}",
+                payload
+            );
+            assert!(
+                r.offset <= payload.len(),
+                "offset out of range for {:?}",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_benign_inputs() {
+        for input in [
+            "Hello, this is a normal text input.",
+            "Bcc victim@evil.com",
+            "From: a@b.c",
+            "Content-Type: text/plain",
+            "boundary abc",
+            "MIME-Version",
+            "multipart/form-data",
+        ] {
+            assert!(
+                MailHeaderDetector.detect(input).is_none(),
+                "false positive: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn edge_cases() {
+        assert!(MailHeaderDetector.detect("").is_none());
+        assert!(MailHeaderDetector.detect("   ").is_none());
+        assert!(
+            MailHeaderDetector
+                .detect("ＢＣＣ: evil@example.com")
+                .is_none()
+        ); // fullwidth letters
+    }
+}
