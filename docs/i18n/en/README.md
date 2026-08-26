@@ -2,7 +2,7 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](./README.md)**
+**🌐 [中文 (原文)](../../README.md)**
 
 An attack detection library written in Rust, covering 4 major categories — injection attacks, protocol attacks, data/serialization attacks, and file/sensitive-data leaks — with 27 detectors in total. Zero external framework dependencies, pure string scanning.
 
@@ -76,7 +76,7 @@ This library is positioned as a **pure input scanner** — it takes a string and
 
 ### Detection Result Structure
 
-`DetectionResult` returns six structured fields: `attack_type`, `category`, `severity`, `matched_pattern`, `offset`, and `message`. See the [API Reference](./docs/API.md) for the full definition.
+`DetectionResult` returns six structured fields: `attack_type`, `category`, `severity`, `matched_pattern`, `offset`, and `message`. See the [API Reference](./API.md) for the full definition.
 
 ---
 
@@ -143,7 +143,7 @@ let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-See the [API Reference](./docs/API.md) for the complete API documentation (installation, selective scanning, custom configuration, severity display, performance).
+See the [API Reference](./API.md) for the complete API documentation (installation, selective scanning, custom configuration, severity display, performance).
 
 ---
 
@@ -168,7 +168,7 @@ If you find this project helpful, donations are welcome (voluntary).
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./docs/alipay.png) | ![WeChat Pay](./docs/weixinpay.png) |
+| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
 
 ### Global Transfer (International Remittance)
 

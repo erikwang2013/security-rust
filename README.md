@@ -2,7 +2,7 @@
 
 # security-rust
 
-[English](./README.en.md) | **中文**
+**🌐 Language:** [English](./docs/i18n/en/README.md) · [한국어](./docs/i18n/ko/README.md) · [Русский](./docs/i18n/ru/README.md) · [Deutsch](./docs/i18n/de/README.md) · [Français](./docs/i18n/fr/README.md) · [Español](./docs/i18n/es/README.md) · [Português](./docs/i18n/pt/README.md) · [हिन्दी](./docs/i18n/hi/README.md) · [العربية](./docs/i18n/ar/README.md) · [বাংলা](./docs/i18n/bn/README.md) · [Bahasa Indonesia](./docs/i18n/id/README.md) · [日本語](./docs/i18n/ja/README.md)
 
 Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据泄露 4 大类共 27 个检测器。零外部框架依赖，纯字符串扫描。
 
@@ -76,16 +76,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 
 ### 检测结果结构
 
-```rust
-pub struct DetectionResult {
-    pub attack_type: String,      // "xss", "sql_injection" ...
-    pub category: AttackCategory, // Injection | Protocol | Data | File
-    pub severity: Severity,       // Critical | High | Medium | Low
-    pub matched_pattern: String,  // 匹配到的具体模式片段
-    pub offset: usize,            // 输入中的字节偏移
-    pub message: String,          // 人类可读说明
-}
-```
+`DetectionResult` 结构化返回 `attack_type`、`category`、`severity`、`matched_pattern`、`offset`、`message` 六项字段。完整定义见 [API 参考](./docs/API.md)。
 
 ---
 
@@ -142,70 +133,17 @@ pub struct DetectionResult {
 
 ## 使用说明
 
-### 安装
-
-```toml
-[dependencies]
-security-rust = "1.0.4"
-```
-
-### 快速开始
+零配置即可使用：
 
 ```rust
 use security_rust::Scanner;
 
-fn main() {
-    // 零配置：装配全部 27 个检测器
-    let scanner = Scanner::default();
-
-    // 扫描输入，返回所有检测到的攻击
-    let results = scanner.scan("<script>alert('xss')</script>");
-
-    for r in &results {
-        println!("[{}] {} — offset: {}, pattern: {}",
-            r.severity, r.message, r.offset, r.matched_pattern);
-    }
-    // 输出:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
-}
-```
-
-### 选择性扫描
-
-```rust
 let scanner = Scanner::default();
-
-// 只运行指定的检测器
-let results = scanner.scan_with(
-    "1 UNION SELECT password FROM users",
-    &["sql_injection", "xss"],
-);
+let results = scanner.scan("<script>alert('xss')</script>");
+// [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-### 自定义配置
-
-```rust
-use security_rust::injection::{XssDetector, SqlInjectionDetector};
-
-// 通过 builder 只装配需要的检测器
-let scanner = Scanner::builder()
-    .with_detector(Box::new(XssDetector))
-    .with_detector(Box::new(SqlInjectionDetector))
-    .build();
-```
-
-### 严重度展示
-
-```rust
-use security_rust::Severity;
-
-let r = &results[0];
-println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
-```
-
-### 性能
-
-Release 构建下，单检测器扫描 ~100ns/次（RegexSet 预编译），全量 27 检测器扫描约 ~5μs/次。适合高吞吐量场景（API 网关、日志管道）。
+完整 API 参考（安装、选择性扫描、自定义配置、严重度展示、性能）见 [API 参考](./docs/API.md)。
 
 ---
 
@@ -224,18 +162,45 @@ cargo clippy -- -D warnings
 
 ---
 
-## 许可
+## 打赏 / 赞助
 
-MIT — Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
+如果这个项目对你有帮助，欢迎打赏支持（自愿）。
+
+| 支付宝 | 微信支付 |
+|--------|---------|
+| ![支付宝](docs/alipay.png) | ![微信支付](docs/weixinpay.png) |
+
+### 全球转账（国际汇款）
+
+【收款人信息】
+- 收款人姓名：WANG KEXUN
+- 收款账户号码：881015918251
+
+【收款银行】
+- ZA Bank SWIFT Code：AABLHKHHXXX
+- 银行名称：ZA Bank Limited
+- 银行编号：387
+- 银行地址：Core F, Cyberport 3, 100 Cyberport Road, Hong Kong
+
+【跨境汇款代理银行（如需）】
+
+请留意，此为跨境汇款代理银行（中转银行）信息，非收款银行信息。请向汇款银行查询是否需要提供跨境汇款代理银行信息。
+
+汇入港元、人民币及美元的代理银行为 Citibank：
+- 银行名称：Citibank N.A. Hong Kong
+- SWIFT Code：CITIHKHXXXX
+- 银行编号：006
+- 分行名称：Hong Kong Branch
+- 分行编号：391
+- 银行地址：Citibank Tower, Citibank Plaza, 3 Garden Road, Central, Hong Kong
+
+汇入其他币种时的代理银行为 BNY Mellon：
+- 银行名称：THE BANK OF NEW YORK MELLON
+- SWIFT Code：IRVTUS3NXXX
+- 银行地址：THE BANK OF NEW YORK MELLON, 240 GREENWICH STREET, NEW YORK, United States
 
 ---
 
-## English
+## 许可
 
-**Full English documentation is available at [README.en.md](./README.en.md).**
-
-A pure Rust attack detection library with 27 detectors across 4 categories. Zero framework dependencies — just `regex` and `thiserror`.
-
-**Categories:** Injection (10), Protocol (9), Data (5), File (3).
-
-Key API surfaces are in English (type names, method names, error messages).
+MIT — Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
