@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -20,7 +20,6 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)LOAD_FILE\s*\(").unwrap(),
         Regex::new(r"(?i)INTO\s+(?:OUT|DUMP)FILE").unwrap(),
         Regex::new(r"(?i)OUTFILE\s+").unwrap(),
-        Regex::new(r"(?i)SELECT\s+\*").unwrap(),
         Regex::new(r"(?i)DROP\s+TABLE").unwrap(),
         Regex::new(r"(?i)INSERT\s+INTO").unwrap(),
     ]
@@ -34,19 +33,7 @@ impl Detector for SqlInjectionDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "sql_injection".into(),
-                    category: AttackCategory::Injection,
-                    severity: Severity::Critical,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "SQL injection detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::Injection, Severity::Critical, "SQL injection detected", input)
     }
 }
 
@@ -59,18 +46,11 @@ mod tests {
     }
 
     fn assert_hit(input: &str) {
-        let r = det()
-            .detect(input)
-            .expect("expected SQL injection detection");
-        assert_eq!(r.attack_type, "sql_injection");
-        assert_eq!(r.category, AttackCategory::Injection);
-        assert_eq!(r.severity, Severity::Critical);
-        assert!(!r.matched_pattern.is_empty(), "matched_pattern empty");
-        assert!(
-            r.offset <= input.len(),
-            "offset {} > len {}",
-            r.offset,
-            input.len()
+        crate::test_helpers::assert_detected(
+            &det(),
+            input,
+            AttackCategory::Injection,
+            Severity::Critical,
         );
     }
 

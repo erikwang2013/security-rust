@@ -23,7 +23,7 @@ impl Detector for OpenRedirectDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
+            for m in re.find_iter(input) {
                 let start = m.start();
                 // Skip // matches that are part of a URL scheme (e.g. https://)
                 if start > 0 && input.as_bytes()[start - 1] == b':' {
@@ -48,26 +48,16 @@ mod tests {
     use super::*;
 
     fn assert_detected(input: &str) {
-        let r = OpenRedirectDetector
-            .detect(input)
-            .expect("expected open_redirect detection");
-        assert_eq!(r.attack_type, "open_redirect");
-        assert_eq!(r.category, AttackCategory::Protocol);
-        assert_eq!(r.severity, Severity::Medium);
-        assert!(!r.matched_pattern.is_empty());
-        assert!(r.offset <= input.len());
-        assert_eq!(
-            &input[r.offset..r.offset + r.matched_pattern.len()],
-            r.matched_pattern
+        crate::test_helpers::assert_detected(
+            &OpenRedirectDetector,
+            input,
+            AttackCategory::Protocol,
+            Severity::Medium,
         );
-        assert!(!r.message.is_empty());
     }
 
     fn assert_clean(input: &str) {
-        assert!(
-            OpenRedirectDetector.detect(input).is_none(),
-            "not detected: {input:?}"
-        );
+        crate::test_helpers::assert_clean(&OpenRedirectDetector, input);
     }
 
     #[test]
@@ -79,6 +69,7 @@ mod tests {
     fn detects_double_slash_url() {
         assert_detected("//evil.com/phishing");
         assert_detected("//attacker.org/steal?u=1");
+        assert_detected("https://ok.com//evil.com"); // scheme match skipped, later redirect still caught
     }
 
     #[test]

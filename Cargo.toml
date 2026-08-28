@@ -2,8 +2,9 @@
 
 [package]
 name = "security-rust"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2024"
+rust-version = "1.87"
 description = "A pure Rust attack detection library with 27 detectors across 4 categories — injection, protocol, data, and file attacks. Zero framework dependencies."
 license = "MIT"
 repository = "https://github.com/erikwang2013/security-rust"
@@ -13,4 +14,3 @@ categories = ["security", "parsing"]
 
 [dependencies]
 regex = "1"
-thiserror = "2"

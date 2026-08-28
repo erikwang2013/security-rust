@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -8,11 +8,11 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         Regex::new(r"\(\s*&").unwrap(),
         Regex::new(r"\(\s*\|").unwrap(),
-        Regex::new(r"\(\s*!").unwrap(),
+        Regex::new(r"\(!\s*\(").unwrap(),
         Regex::new(r"\*\(cn=").unwrap(),
         Regex::new(r"\(\s*objectClass\s*=").unwrap(),
         Regex::new(r"\(\s*uid\s*=").unwrap(),
-        Regex::new(r"\)\(\s*").unwrap(),
+        Regex::new(r"\)\s*\((?:&|\||!)").unwrap(),
         Regex::new(r"\(\s*cn\s*=").unwrap(),
     ]
 });
@@ -25,19 +25,7 @@ impl Detector for LdapInjectionDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "ldap_injection".into(),
-                    category: AttackCategory::Injection,
-                    severity: Severity::High,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "LDAP injection detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::Injection, Severity::High, "LDAP injection detected", input)
     }
 }
 
@@ -50,18 +38,11 @@ mod tests {
     }
 
     fn assert_hit(input: &str) {
-        let r = det()
-            .detect(input)
-            .expect("expected LDAP injection detection");
-        assert_eq!(r.attack_type, "ldap_injection");
-        assert_eq!(r.category, AttackCategory::Injection);
-        assert_eq!(r.severity, Severity::High);
-        assert!(!r.matched_pattern.is_empty(), "matched_pattern empty");
-        assert!(
-            r.offset <= input.len(),
-            "offset {} > len {}",
-            r.offset,
-            input.len()
+        crate::test_helpers::assert_detected(
+            &det(),
+            input,
+            AttackCategory::Injection,
+            Severity::High,
         );
     }
 

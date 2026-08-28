@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 
 static CC_PAN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\d{3})\d{11})\b").unwrap()
@@ -27,34 +27,19 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 fn luhn_valid(pan: &str) -> bool {
-    let digits: Vec<u8> = pan
-        .as_bytes()
-        .iter()
-        .filter_map(|b| {
-            if b.is_ascii_digit() {
-                Some(b - b'0')
-            } else {
-                None
-            }
-        })
-        .collect();
-    if digits.len() < 13 {
-        return false;
+    let mut len = 0;
+    let mut sum = 0u32;
+    for (i, b) in pan.bytes().rev().filter(|b| b.is_ascii_digit()).enumerate() {
+        len += 1;
+        let d = (b - b'0') as u32;
+        if i % 2 == 1 {
+            let doubled = d * 2;
+            sum += if doubled > 9 { doubled - 9 } else { doubled };
+        } else {
+            sum += d;
+        }
     }
-    let sum: u32 = digits
-        .iter()
-        .rev()
-        .enumerate()
-        .map(|(i, &d)| {
-            if i % 2 == 1 {
-                let doubled = d as u32 * 2;
-                if doubled > 9 { doubled - 9 } else { doubled }
-            } else {
-                d as u32
-            }
-        })
-        .sum();
-    sum.is_multiple_of(10)
+    len >= 13 && sum.is_multiple_of(10)
 }
 
 pub struct DataLeakDetector;
@@ -69,7 +54,7 @@ impl Detector for DataLeakDetector {
             && luhn_valid(m.as_str())
         {
             return Some(DetectionResult {
-                attack_type: "data_leak".into(),
+                attack_type: self.name().into(),
                 category: AttackCategory::File,
                 severity: Severity::Critical,
                 matched_pattern: m.as_str().to_string(),
@@ -77,26 +62,13 @@ impl Detector for DataLeakDetector {
                 message: "Sensitive data leak detected (credit card)".into(),
             });
         }
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "data_leak".into(),
-                    category: AttackCategory::File,
-                    severity: Severity::Critical,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "Sensitive data leak detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::File, Severity::Critical, "Sensitive data leak detected", input)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AttackCategory, Detector, Severity};
 
     #[test]
     fn name_returns_attack_type() {

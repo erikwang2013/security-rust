@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -29,19 +29,7 @@ impl Detector for SsrfDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "ssrf".into(),
-                    category: AttackCategory::Protocol,
-                    severity: Severity::Critical,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "SSRF server-side request forgery detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::Protocol, Severity::Critical, "SSRF server-side request forgery detected", input)
     }
 }
 
@@ -50,24 +38,16 @@ mod tests {
     use super::*;
 
     fn assert_detected(input: &str) {
-        let r = SsrfDetector.detect(input).expect("expected ssrf detection");
-        assert_eq!(r.attack_type, "ssrf");
-        assert_eq!(r.category, AttackCategory::Protocol);
-        assert_eq!(r.severity, Severity::Critical);
-        assert!(!r.matched_pattern.is_empty());
-        assert!(r.offset <= input.len());
-        assert_eq!(
-            &input[r.offset..r.offset + r.matched_pattern.len()],
-            r.matched_pattern
+        crate::test_helpers::assert_detected(
+            &SsrfDetector,
+            input,
+            AttackCategory::Protocol,
+            Severity::Critical,
         );
-        assert!(!r.message.is_empty());
     }
 
     fn assert_clean(input: &str) {
-        assert!(
-            SsrfDetector.detect(input).is_none(),
-            "not detected: {input:?}"
-        );
+        crate::test_helpers::assert_clean(&SsrfDetector, input);
     }
 
     #[test]

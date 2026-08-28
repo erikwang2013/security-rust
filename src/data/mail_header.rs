@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -23,26 +23,13 @@ impl Detector for MailHeaderDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "mail_header".into(),
-                    category: AttackCategory::Data,
-                    severity: Severity::Medium,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "Mail header injection detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::Data, Severity::Medium, "Mail header injection detected", input)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AttackCategory, Detector, Severity};
 
     #[test]
     fn name_returns_attack_type() {

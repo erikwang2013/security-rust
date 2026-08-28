@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{AttackCategory, DetectionResult, Detector, Severity};
+use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -28,19 +28,7 @@ impl Detector for SstiDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        for re in PATTERNS.iter() {
-            if let Some(m) = re.find(input) {
-                return Some(DetectionResult {
-                    attack_type: "ssti".into(),
-                    category: AttackCategory::Injection,
-                    severity: Severity::Critical,
-                    matched_pattern: m.as_str().to_string(),
-                    offset: m.start(),
-                    message: "Server-Side Template Injection detected".into(),
-                });
-            }
-        }
-        None
+        regex_detect(&PATTERNS, self.name(), AttackCategory::Injection, Severity::Critical, "Server-Side Template Injection detected", input)
     }
 }
 
@@ -53,16 +41,11 @@ mod tests {
     }
 
     fn assert_hit(input: &str) {
-        let r = det().detect(input).expect("expected SSTI detection");
-        assert_eq!(r.attack_type, "ssti");
-        assert_eq!(r.category, AttackCategory::Injection);
-        assert_eq!(r.severity, Severity::Critical);
-        assert!(!r.matched_pattern.is_empty(), "matched_pattern empty");
-        assert!(
-            r.offset <= input.len(),
-            "offset {} > len {}",
-            r.offset,
-            input.len()
+        crate::test_helpers::assert_detected(
+            &det(),
+            input,
+            AttackCategory::Injection,
+            Severity::Critical,
         );
     }
 
