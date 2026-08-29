@@ -137,7 +137,17 @@ mod tests {
 
     #[test]
     fn scan_returns_empty_for_clean_input() {
-        assert!(Scanner::default().scan("hello world 123").is_empty());
+        for input in [
+            "hello world 123",
+            "q=2024--2025",
+            "q=donation=5",
+            "穿越之霸道总裁爱上我--重生之都市修仙",
+        ] {
+            assert!(
+                Scanner::default().scan(input).is_empty(),
+                "false positive: {input}"
+            );
+        }
     }
 
     #[test]

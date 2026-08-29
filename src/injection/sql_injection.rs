@@ -22,6 +22,9 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)OUTFILE\s+").unwrap(),
         Regex::new(r"(?i)DROP\s+TABLE").unwrap(),
         Regex::new(r"(?i)INSERT\s+INTO").unwrap(),
+        // `--` requires trailing space/EOL/`+` (MySQL URL-encoded space) so SSI's `"-->` stays clean
+        Regex::new(r#"(?i)(?:'|"|\))\s*(?:(?:--(?:\s|$|\+))|#|/\*)"#).unwrap(),
+        Regex::new(r"(?i)(?:/\*.*?\*/|--|#)\s*(?:or|and|union|select)\b").unwrap(),
     ]
 });
 
@@ -69,6 +72,11 @@ mod tests {
             "id=1 /*!50000union select*/",
             "1; WAITFOR DELAY '0:0:5'",
             "username' OR 1=1 --",
+            "admin'--",
+            "1') --",
+            "x'#comment",
+            "-- or 1=1",
+            "/*x*/ union select",
         ] {
             assert_hit(input);
         }
@@ -83,6 +91,11 @@ mod tests {
             "The benchmark results look great",
             "Drop me a line when you arrive",
             "The information desk is on the second floor",
+            "q=2024--2025",
+            "q=donation=5",
+            "穿越之霸道总裁爱上我--重生之都市修仙",
+            "chapter 2024--2025 更新",
+            "donation=5&q=test",
         ] {
             assert!(det().detect(input).is_none(), "false positive: {input}");
         }
