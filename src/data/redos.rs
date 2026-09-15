@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -78,7 +78,9 @@ impl Detector for ReDoSDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         if let Some((open, quant_len)) = repeated_prefix_branch(input) {
-            let end = input[open..].find(')').map_or(input.len(), |e| open + e + 1 + quant_len);
+            let end = input[open..]
+                .find(')')
+                .map_or(input.len(), |e| open + e + 1 + quant_len);
             return Some(DetectionResult {
                 attack_type: self.name().to_string(),
                 category: AttackCategory::Data,
@@ -88,7 +90,14 @@ impl Detector for ReDoSDetector {
                 message: "Catastrophic backtracking pattern detected".into(),
             });
         }
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Data, Severity::Medium, "Catastrophic backtracking pattern detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Data,
+            Severity::Medium,
+            "Catastrophic backtracking pattern detected",
+            input,
+        )
     }
 }
 
@@ -153,11 +162,7 @@ mod tests {
 
     #[test]
     fn detects_in_longer_expression() {
-        for input in [
-            r"^\s*(a+)+$",
-            r"^(\w+\s?)*$",
-            r"^([a-z]+)*$",
-        ] {
+        for input in [r"^\s*(a+)+$", r"^(\w+\s?)*$", r"^([a-z]+)*$"] {
             assert_hit(input);
         }
     }

@@ -245,8 +245,8 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::store::MemoryStore;
     use super::super::Decision;
+    use super::super::store::MemoryStore;
     use super::*;
 
     const NOW: u64 = 1_000_000;

@@ -19,7 +19,8 @@ static ACAO_WILDCARD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Access-Control-Allow-Origin:\s*\*").unwrap());
 static CREDS_TRUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Access-Control-Allow-Credentials:\s*true").unwrap());
-static ORIGIN_NULL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Origin:\s*null\b").unwrap());
+static ORIGIN_NULL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)Origin:\s*null\b").unwrap());
 
 pub struct CorsDetector;
 
@@ -33,7 +34,10 @@ impl Detector for CorsDetector {
         // 先判 ACAO 形态，命中时 matched_pattern 才是完整的那一行。
         let m = if let Some(m) = ACAO_NULL.find(input) {
             m
-        } else if let Some(m) = ACAO_WILDCARD.find(input).filter(|_| CREDS_TRUE.is_match(input)) {
+        } else if let Some(m) = ACAO_WILDCARD
+            .find(input)
+            .filter(|_| CREDS_TRUE.is_match(input))
+        {
             m
         } else {
             ORIGIN_NULL.find(input)?
@@ -119,7 +123,9 @@ mod tests {
         assert_clean("Access-Control-Allow-Credentials: false");
         assert_clean("Origin: *");
         // 反射/白名单回显：与请求 Origin 相同的 ACAO 是正常动态 CORS
-        assert_clean("Origin: https://example.com\r\nAccess-Control-Allow-Origin: https://example.com");
+        assert_clean(
+            "Origin: https://example.com\r\nAccess-Control-Allow-Origin: https://example.com",
+        );
         // `null` 必须是完整的 token
         assert_clean("Access-Control-Allow-Origin: nullify-me");
     }

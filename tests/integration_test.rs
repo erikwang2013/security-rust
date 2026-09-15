@@ -257,7 +257,10 @@ fn test_websocket_legit_handshake_is_clean() {
             .map(|r| r.attack_type.as_str())
             .filter(|t| *t == "websocket")
             .collect();
-        assert!(hits.is_empty(), "合法握手被 websocket 检测器命中: {legit:?}");
+        assert!(
+            hits.is_empty(),
+            "合法握手被 websocket 检测器命中: {legit:?}"
+        );
     }
 }
 

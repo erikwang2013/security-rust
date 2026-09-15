@@ -10,8 +10,7 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity};
 /// 浏览器从沙箱 iframe、`data:` URL、部分跨域重定向场景发出的请求会带这个值。
 /// 单独出现不足以判定（某些代理会剥离 Origin，部分合法前端也这么发），
 /// 必须与 WebSocket 升级同时出现才算。
-static ORIGIN_NULL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)Origin:\s*null").unwrap());
+static ORIGIN_NULL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)Origin:\s*null").unwrap());
 
 /// WebSocket 升级头。
 ///

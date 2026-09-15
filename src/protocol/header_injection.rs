@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -28,7 +28,14 @@ impl Detector for HeaderInjectionDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Protocol, Severity::High, "HTTP header injection (CRLF) detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Protocol,
+            Severity::High,
+            "HTTP header injection (CRLF) detected",
+            input,
+        )
     }
 }
 

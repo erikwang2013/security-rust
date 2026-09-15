@@ -54,11 +54,7 @@ pub(crate) fn location_changed(recorded: Option<&str>, current: Option<&str>) ->
 ///
 /// 返回隐含速度（km/h）当且仅当它超过 `max_kmh`；否则返回 `None`。
 /// 缺少任一侧坐标、或时间未前进时返回 `None`（不判定）。
-pub(crate) fn impossible_travel(
-    prev: &LoginPoint,
-    cur: &LoginPoint,
-    max_kmh: f64,
-) -> Option<f64> {
+pub(crate) fn impossible_travel(prev: &LoginPoint, cur: &LoginPoint, max_kmh: f64) -> Option<f64> {
     let (a, b) = (prev.coords?, cur.coords?);
     // 时间未前进（含相等）：无法计算速度，交给其它检查项
     if cur.at <= prev.at {
@@ -144,7 +140,10 @@ mod tests {
         assert_eq!(sanitize_coords(Some((0.0, 181.0))), None);
         // 闭区间边界合法
         assert_eq!(sanitize_coords(Some((90.0, 180.0))), Some((90.0, 180.0)));
-        assert_eq!(sanitize_coords(Some((-90.0, -180.0))), Some((-90.0, -180.0)));
+        assert_eq!(
+            sanitize_coords(Some((-90.0, -180.0))),
+            Some((-90.0, -180.0))
+        );
         assert_eq!(sanitize_coords(Some(BEIJING)), Some(BEIJING));
     }
 

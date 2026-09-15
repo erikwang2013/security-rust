@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -16,8 +16,14 @@ use std::sync::LazyLock;
 //      `;z=3` 后面跟着的是协议版本。
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200};[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)").unwrap(),
-        Regex::new(r"(?i);[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)").unwrap(),
+        Regex::new(
+            r"(?i)&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200};[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)",
+        )
+        .unwrap(),
+        Regex::new(
+            r"(?i);[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)",
+        )
+        .unwrap(),
     ]
 });
 
@@ -25,7 +31,10 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// 的 `;` 是路径分隔符而非参数分隔符——只保留重复 key 判定，混用形态不再报。
 fn has_matrix_session(input: &str) -> bool {
     const NEEDLE: &[u8] = b";jsessionid=";
-    input.as_bytes().windows(NEEDLE.len()).any(|w| w.eq_ignore_ascii_case(NEEDLE))
+    input
+        .as_bytes()
+        .windows(NEEDLE.len())
+        .any(|w| w.eq_ignore_ascii_case(NEEDLE))
 }
 
 /// 同一 key 重复出现的位置。`regex` crate 无反向引用，纯正则表达不了
@@ -86,7 +95,14 @@ impl Detector for HttpParameterPollutionDetector {
         if has_matrix_session(input) {
             return None;
         }
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Protocol, Severity::Medium, "HTTP parameter pollution detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Protocol,
+            Severity::Medium,
+            "HTTP parameter pollution detected",
+            input,
+        )
     }
 }
 

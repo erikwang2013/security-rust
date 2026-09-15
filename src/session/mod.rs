@@ -46,7 +46,9 @@ pub enum SessionThreat {
     /// 登录时未设签名基线，但本请求提供了签名。
     SignatureUnexpected,
     LocationChanged,
-    ImpossibleTravel { kmh: f64 },
+    ImpossibleTravel {
+        kmh: f64,
+    },
     TimestampSkew,
     StoreUnavailable,
 }
@@ -404,7 +406,10 @@ mod tests {
 
     #[test]
     fn errors_display_and_source() {
-        assert_eq!(SessionError::EmptyToken.to_string(), "token must not be empty");
+        assert_eq!(
+            SessionError::EmptyToken.to_string(),
+            "token must not be empty"
+        );
         assert_eq!(
             SessionError::UnknownSession.to_string(),
             "session not found or no longer valid"

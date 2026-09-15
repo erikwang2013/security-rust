@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -12,8 +12,7 @@ use std::sync::LazyLock;
 // Java/Kotlin 注解（`@GET("/users")`、`@POST("/users")`）和待办标记
 // （`@TODO(清理临时文件)`）全被打成 High——注解在源码/日志里满地都是。
 // `regex` crate 没有反向断言，写不出"排除这几个名字"，只能反过来列公式函数。
-const AT_FUNCS: &str =
-    "SUM|HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC|AVERAGE|COUNT|MIN|MAX";
+const AT_FUNCS: &str = "SUM|HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC|AVERAGE|COUNT|MIN|MAX";
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -44,7 +43,14 @@ impl Detector for FormulaInjectionDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Data, Severity::High, "Spreadsheet formula injection detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Data,
+            Severity::High,
+            "Spreadsheet formula injection detected",
+            input,
+        )
     }
 }
 
@@ -120,17 +126,16 @@ mod tests {
             "matched_pattern 应覆盖载荷: {:?}",
             r.matched_pattern
         );
-        assert_eq!(&csv[r.offset..r.offset + r.matched_pattern.len()], r.matched_pattern);
+        assert_eq!(
+            &csv[r.offset..r.offset + r.matched_pattern.len()],
+            r.matched_pattern
+        );
     }
 
     #[test]
     fn ignores_doc_commands_and_annotations() {
         // 文档里的命令列表：`cmd` 与 `|` 之间有空格，且没有单元格引用
-        for input in [
-            "- cmd | run the build",
-            "- CMD | echo hi",
-            "| cmd | 说明",
-        ] {
+        for input in ["- cmd | run the build", "- CMD | echo hi", "| cmd | 说明"] {
             assert_clean(&det(), input);
         }
         // Java/Kotlin 注解与待办标记：全大写标识符 + `(` 不等于公式

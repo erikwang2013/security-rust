@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -8,7 +8,8 @@ use std::sync::LazyLock;
 // "`}` 后面跟着 ndi"会把 shell 的 `${VAR:-${DEFAULT}}`、`${VAR:?${MSG}}`、
 // `${PATH:+${PATH}:/opt}` 和 `${x}${y}` 全打成 Critical。这些形状在 shell/Makefile
 // 里是日常写法，唯一能把它们和 log4j 混淆区分开的就是关键字。
-const LOOKUP: &str = r"(?:jndi|lower|upper|env|sys|date|java|main|ctx|base64|hostName|map|marker|spring)";
+const LOOKUP: &str =
+    r"(?:jndi|lower|upper|env|sys|date|java|main|ctx|base64|hostName|map|marker|spring)";
 
 // 与 JndiInjectionDetector 的分工：那边认字面量 `${jndi:`、`${lower:j}`，
 // 这边专攻"lookup 展开后才拼出 jndi"的混淆变体——攻击串里根本不含 `jndi` 五个字母。
@@ -20,13 +21,27 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)\$\{\s*::-?[a-z]{1,3}\s*\}").unwrap(),
         // ${<lookup>}ndi: —— lookup 展开结果紧邻 ndi（`${lower:j}ndi:` 里 `}` 直接接 ndi，
         // 所以判据只能放在花括号内是不是 lookup，不能放在 `}` 后面跟什么）
-        Regex::new(&[r"(?i)\$\{\s*", LOOKUP, r"\s*:[^{}]{0,120}\}\s*[a-z]{0,4}ndi\s*[:/{]"].concat())
-            .unwrap(),
+        Regex::new(
+            &[
+                r"(?i)\$\{\s*",
+                LOOKUP,
+                r"\s*:[^{}]{0,120}\}\s*[a-z]{0,4}ndi\s*[:/{]",
+            ]
+            .concat(),
+        )
+        .unwrap(),
         // ${${<lookup>...}}：嵌套展开，内层同样必须是 lookup 关键字
         Regex::new(&[r"(?i)\$\{\s*[^{}]{0,120}\$\{\s*", LOOKUP, r"\s*:"].concat()).unwrap(),
         // URL 编码形态 %24%7Blower%3Aj%7Dndi，绕 WAF 用
-        Regex::new(&[r"(?i)%24%7b\s*", LOOKUP, r"\s*(?::|%3a).{0,120}%7d.{0,4}ndi"].concat())
-            .unwrap(),
+        Regex::new(
+            &[
+                r"(?i)%24%7b\s*",
+                LOOKUP,
+                r"\s*(?::|%3a).{0,120}%7d.{0,4}ndi",
+            ]
+            .concat(),
+        )
+        .unwrap(),
     ]
 });
 
@@ -38,7 +53,14 @@ impl Detector for Log4ShellDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Protocol, Severity::Critical, "Log4Shell lookup obfuscation detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Protocol,
+            Severity::Critical,
+            "Log4Shell lookup obfuscation detected",
+            input,
+        )
     }
 }
 
@@ -151,12 +173,7 @@ mod tests {
     fn ignores_short_suffix_before_ndi() {
         // `ndi` 前只剩短尾巴（`${x}ndi/`）不是 log4j：`${lower:j}ndi:` 里的 `}` 直接接
         // ndi，所以不能靠"`}` 后必须有 j"来判定，只能要求花括号内是 lookup。
-        for input in [
-            "${x}ndi/x",
-            "${x}indi:",
-            "${x}hindi:",
-            "${name}andi: 你好",
-        ] {
+        for input in ["${x}ndi/x", "${x}indi:", "${x}hindi:", "${name}andi: 你好"] {
             assert_clean(&det(), input);
         }
     }

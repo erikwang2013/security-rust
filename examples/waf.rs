@@ -228,15 +228,16 @@ fn handle(
 
 /// 示例脚本：固定时间、固定输入。
 fn requests() -> Vec<Request<'static>> {
-    let alice = |token: &'static str, fp: &'static str, loc: &'static str, at: u64| RequestContext {
-        token,
-        subject: "alice",
-        fingerprint: fp,
-        location: Some(loc),
-        coords: None,
-        signature: None,
-        at: Some(at),
-    };
+    let alice =
+        |token: &'static str, fp: &'static str, loc: &'static str, at: u64| RequestContext {
+            token,
+            subject: "alice",
+            fingerprint: fp,
+            location: Some(loc),
+            coords: None,
+            signature: None,
+            at: Some(at),
+        };
 
     vec![
         Request {

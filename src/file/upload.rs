@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -33,7 +33,14 @@ impl Detector for UploadDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        regex_detect(&PATTERNS, self.name(), AttackCategory::File, Severity::Critical, "Malicious file upload detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::File,
+            Severity::Critical,
+            "Malicious file upload detected",
+            input,
+        )
     }
 }
 

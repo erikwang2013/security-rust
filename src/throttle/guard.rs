@@ -41,10 +41,7 @@ impl<S: ThrottleStore> Throttle<S> {
             // 自己比对 `now`，不假定后端已过滤：后端若返回原始值（第三方的
             // Redis 实现常见的做法），直接信它就等于把 key 永久锁死。
             Ok(Some(until)) if until > now => ThrottleDecision::Banned { until },
-            Ok(_) => match self
-                .store
-                .failure_count(key, now, self.config.window_secs)
-            {
+            Ok(_) => match self.store.failure_count(key, now, self.config.window_secs) {
                 Ok(count) => ThrottleDecision::Allow {
                     remaining: self.remaining(count),
                 },
@@ -109,7 +106,9 @@ impl<S: ThrottleStore> Throttle<S> {
     /// 同理，`ban` 写失败时计数已经落库：本调用返回 `Err`，但下一步 `check`
     /// 会看到 `Allow { remaining: 0 }`（额度确实耗尽），由调用方据此拒绝。
     pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError> {
-        let count = self.store.record_failure(key, now, self.config.window_secs)?;
+        let count = self
+            .store
+            .record_failure(key, now, self.config.window_secs)?;
         if count >= self.config.threshold {
             let until = now.saturating_add(self.config.ban_secs);
             self.store.ban(key, until)?;
@@ -199,7 +198,10 @@ mod tests {
     fn check_does_not_consume_budget() {
         let t = throttle(5, 60, 900);
         for _ in 0..10 {
-            assert_eq!(t.check("ip:a", NOW), ThrottleDecision::Allow { remaining: 5 });
+            assert_eq!(
+                t.check("ip:a", NOW),
+                ThrottleDecision::Allow { remaining: 5 }
+            );
         }
         assert_eq!(
             t.record_failure("ip:a", NOW).unwrap(),
@@ -238,6 +240,9 @@ mod tests {
         t.record_failure("ip:a", NOW).unwrap();
         assert_eq!(t.purge_expired(NOW).unwrap(), 0, "窗口内不该被清");
         assert_eq!(t.purge_expired(NOW + 1_000).unwrap(), 1);
-        assert_eq!(t.check("ip:a", NOW + 1_000), ThrottleDecision::Allow { remaining: 5 });
+        assert_eq!(
+            t.check("ip:a", NOW + 1_000),
+            ThrottleDecision::Allow { remaining: 5 }
+        );
     }
 }

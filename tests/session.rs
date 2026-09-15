@@ -3,11 +3,11 @@
 //! `SessionGuard::verify` 的威胁判定与 fail-closed 行为。
 //! 生命周期（bind / rotate / revoke）在 `tests/session_lifecycle.rs`。
 
+use security_rust::Severity;
+use security_rust::session::store::{LoginPoint, SessionRecord, SessionStore};
 use security_rust::session::{
     Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard, SessionThreat, StoreError,
 };
-use security_rust::session::store::{LoginPoint, SessionRecord, SessionStore};
-use security_rust::Severity;
 
 const NOW: u64 = 1_000_000;
 const FP: &str = "ip=1.2.3.4|ua=curl";
@@ -193,7 +193,10 @@ fn verify_valid_request_is_allowed() {
     let v = g.verify(&ctx("t1", "u1", FP), NOW + 10);
     assert!(v.is_allowed(), "误报: {:?}", v.threats);
     assert!(v.threats.is_empty());
-    assert_eq!(v.severity, None, "放行时不该有 severity（更不该拿 LOW 占位）");
+    assert_eq!(
+        v.severity, None,
+        "放行时不该有 severity（更不该拿 LOW 占位）"
+    );
 }
 
 #[test]
@@ -397,11 +400,7 @@ fn verify_fails_closed_when_login_history_unavailable() {
     let g = SessionGuard::new(store, SessionConfig::default());
 
     let v = g.verify(&ctx("t1", "u1", FP), NOW + 10);
-    assert_eq!(
-        v.decision,
-        Decision::Block,
-        "登录历史读不到时绝不能放行"
-    );
+    assert_eq!(v.decision, Decision::Block, "登录历史读不到时绝不能放行");
     assert_eq!(v.threats, vec![SessionThreat::StoreUnavailable]);
 }
 

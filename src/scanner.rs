@@ -11,8 +11,8 @@ use crate::injection::{
     SsiInjectionDetector, SstiDetector, XPathInjectionDetector, XssDetector,
 };
 use crate::protocol::{
-    CorsDetector, DnsRebindingDetector, HeaderInjectionDetector,
-    HostHeaderDetector, HttpParameterPollutionDetector, Log4ShellDetector, OpenRedirectDetector,
+    CorsDetector, DnsRebindingDetector, HeaderInjectionDetector, HostHeaderDetector,
+    HttpParameterPollutionDetector, Log4ShellDetector, OpenRedirectDetector,
     RequestSmugglingDetector, SsrfDetector, WebSocketDetector, XxeDetector,
 };
 use crate::score::{self, RiskAssessment};
@@ -180,8 +180,21 @@ mod tests {
             "line one\r\nline two",
             "5*(3+2)",
         ] {
-            let results = scanner.scan_with(input, &["log4shell", "hpp", "formula_injection", "redos", "format_string"]);
-            assert!(results.is_empty(), "新检测器误报 {input:?}: {:?}", types(&results));
+            let results = scanner.scan_with(
+                input,
+                &[
+                    "log4shell",
+                    "hpp",
+                    "formula_injection",
+                    "redos",
+                    "format_string",
+                ],
+            );
+            assert!(
+                results.is_empty(),
+                "新检测器误报 {input:?}: {:?}",
+                types(&results)
+            );
         }
     }
 
@@ -206,7 +219,11 @@ mod tests {
         let input = "=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd";
         let a = Scanner::default().assess(input);
         assert!(a.results >= 3, "期望多条命中，实际 {:?}", a);
-        assert!(a.level >= crate::score::RiskLevel::High, "叠加后应升级: {:?}", a);
+        assert!(
+            a.level >= crate::score::RiskLevel::High,
+            "叠加后应升级: {:?}",
+            a
+        );
     }
 
     #[test]

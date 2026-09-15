@@ -147,7 +147,10 @@ mod tests {
     #[test]
     fn stacked_lows_escalate() {
         // 5+5 = 10 → 还是 Low
-        assert_eq!(score(&hits(&[Severity::Low, Severity::Low])), RiskLevel::Low);
+        assert_eq!(
+            score(&hits(&[Severity::Low, Severity::Low])),
+            RiskLevel::Low
+        );
         // 5*3 = 15 → Medium
         assert_eq!(
             score(&hits(&[Severity::Low, Severity::Low, Severity::Low])),
@@ -168,7 +171,10 @@ mod tests {
         // 40*3 = 120 → Critical
         assert_eq!(score(&repeated(Severity::High, 3)), RiskLevel::Critical);
         // 40 + 5 = 45 → High
-        assert_eq!(score(&hits(&[Severity::High, Severity::Low])), RiskLevel::High);
+        assert_eq!(
+            score(&hits(&[Severity::High, Severity::Low])),
+            RiskLevel::High
+        );
     }
 
     #[test]

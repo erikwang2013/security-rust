@@ -103,7 +103,10 @@ mod tests {
 
     #[test]
     fn decision_and_outcome_display_uppercase() {
-        assert_eq!(ThrottleDecision::Allow { remaining: 3 }.to_string(), "ALLOW");
+        assert_eq!(
+            ThrottleDecision::Allow { remaining: 3 }.to_string(),
+            "ALLOW"
+        );
         assert_eq!(ThrottleDecision::Banned { until: 7 }.to_string(), "BANNED");
         assert_eq!(ThrottleDecision::Unavailable.to_string(), "UNAVAILABLE");
         assert_eq!(ThrottleOutcome::Allow { remaining: 3 }.to_string(), "ALLOW");

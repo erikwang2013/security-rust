@@ -148,7 +148,8 @@ fn revoke_all_kills_every_session_of_subject() {
 fn rotate_rejects_unknown_old_token() {
     let g = guard();
     assert_eq!(
-        g.rotate("ghost", "new", &ctx("ghost", "u1", FP), NOW).unwrap_err(),
+        g.rotate("ghost", "new", &ctx("ghost", "u1", FP), NOW)
+            .unwrap_err(),
         security_rust::session::SessionError::UnknownSession
     );
 }

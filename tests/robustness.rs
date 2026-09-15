@@ -84,7 +84,14 @@ fn corpus() -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
 
     // 空与空白
-    for s in ["", " ", "\t\n\r", "\u{3000}\u{3000}", "\r\n\r\n", "   \t  \n"] {
+    for s in [
+        "",
+        " ",
+        "\t\n\r",
+        "\u{3000}\u{3000}",
+        "\r\n\r\n",
+        "   \t  \n",
+    ] {
         v.push(s.to_string());
     }
 
@@ -101,8 +108,26 @@ fn corpus() -> Vec<String> {
 
     // 截断的编码 / 编码残片
     for s in [
-        "%", "%0", "%0d", "%zz", "%%", "%u0027", "%c0%ae%c0%ae", "&#", "&#x", "&#xZZ;", "&#x27",
-        "&amp", "&lt", "\\u{", "\\u00", "\\x", "\\xZZ", "\\", "\\\\", "\\u{110000}",
+        "%",
+        "%0",
+        "%0d",
+        "%zz",
+        "%%",
+        "%u0027",
+        "%c0%ae%c0%ae",
+        "&#",
+        "&#x",
+        "&#xZZ;",
+        "&#x27",
+        "&amp",
+        "&lt",
+        "\\u{",
+        "\\u00",
+        "\\x",
+        "\\xZZ",
+        "\\",
+        "\\\\",
+        "\\u{110000}",
     ] {
         v.push(s.to_string());
     }
@@ -288,11 +313,11 @@ fn corpus_is_non_trivial() {
         corpus.len()
     );
     assert!(corpus.iter().any(|s| s.is_empty()), "缺少空串");
-    assert!(corpus.iter().any(|s| s.chars().count() > 50_000), "缺少超长输入");
     assert!(
-        corpus.iter().any(|s| s.contains('\0')),
-        "缺少 NUL 字节输入"
+        corpus.iter().any(|s| s.chars().count() > 50_000),
+        "缺少超长输入"
     );
+    assert!(corpus.iter().any(|s| s.contains('\0')), "缺少 NUL 字节输入");
     assert!(
         corpus.iter().any(|s| s.contains('\u{FFFD}')),
         "缺少无效 UTF-8 lossy 输入"

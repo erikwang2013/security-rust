@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 
 static CC_PAN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\d{3})\d{11})\b").unwrap()
@@ -62,7 +62,14 @@ impl Detector for DataLeakDetector {
                 message: "Sensitive data leak detected (credit card)".into(),
             });
         }
-        regex_detect(&PATTERNS, self.name(), AttackCategory::File, Severity::Critical, "Sensitive data leak detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::File,
+            Severity::Critical,
+            "Sensitive data leak detected",
+            input,
+        )
     }
 }
 

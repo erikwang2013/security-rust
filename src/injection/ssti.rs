@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-use crate::{regex_detect, AttackCategory, DetectionResult, Detector, Severity};
+use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -44,7 +44,14 @@ impl Detector for SstiDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
-        regex_detect(&PATTERNS, self.name(), AttackCategory::Injection, Severity::Critical, "Server-Side Template Injection detected", input)
+        regex_detect(
+            &PATTERNS,
+            self.name(),
+            AttackCategory::Injection,
+            Severity::Critical,
+            "Server-Side Template Injection detected",
+            input,
+        )
     }
 }
 

@@ -157,7 +157,8 @@ fn all_detectors_are_registered_and_named() {
     for n in &names {
         assert!(!n.is_empty(), "检测器名字为空");
         assert!(
-            n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            n.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
             "检测器名字不是 snake_case: {n:?}"
         );
         assert!(
