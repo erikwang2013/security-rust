@@ -220,11 +220,45 @@ fn test_cors_null_origin() {
 }
 
 #[test]
-fn test_websocket_upgrade() {
+fn test_websocket_cswsh() {
+    // CSWSH：Origin: null 与 WebSocket 升级同时出现。
+    // 注意 `Upgrade: websocket` 单独出现是**合法握手的必需头**，不得命中 ——
+    // 见 test_websocket_legit_handshake_is_clean。
+    // 不断言 results[0] —— 该输入同时会命中 cors（`Origin: null`），
+    // 检测器在结果里的顺序不是本测试要钉的东西
     let scanner = Scanner::default();
-    let results = scanner.scan("Upgrade: websocket");
-    assert!(!results.is_empty());
-    assert_eq!(results[0].attack_type, "websocket");
+    let results = scanner.scan("Origin: null\r\nUpgrade: websocket");
+    let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
+    assert!(types.contains(&"websocket"), "got {types:?}");
+}
+
+#[test]
+fn test_websocket_ssrf() {
+    let scanner = Scanner::default();
+    let results = scanner.scan("ws://169.254.169.254/latest/meta-data/");
+    let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
+    assert!(types.contains(&"websocket"), "got {types:?}");
+}
+
+#[test]
+fn test_websocket_legit_handshake_is_clean() {
+    // 回归防护：合法握手曾被 websocket 检测器判为 High，接进阻断路径会
+    // 打死整个 WebSocket 业务。这几条必须保持干净。
+    let scanner = Scanner::default();
+    for legit in [
+        "Upgrade: websocket",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+        "GET /chat HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13",
+        "ws://example.com/socket",
+    ] {
+        let results = scanner.scan(legit);
+        let hits: Vec<&str> = results
+            .iter()
+            .map(|r| r.attack_type.as_str())
+            .filter(|t| *t == "websocket")
+            .collect();
+        assert!(hits.is_empty(), "合法握手被 websocket 检测器命中: {legit:?}");
+    }
 }
 
 #[test]
@@ -420,7 +454,9 @@ fn test_default_covers_all_categories() {
         ),
         ("open_redirect", "//evil.com"),
         ("cors", "Origin: null"),
-        ("websocket", "Upgrade: websocket"),
+        // websocket 只报 CSWSH（Origin: null + 升级）与 WS SSRF；
+        // `Upgrade: websocket` 单独是合法握手的必需头，不再命中
+        ("websocket", "Origin: null\r\nUpgrade: websocket"),
         ("dns_rebinding", "Host: 127.0.0.1"),
         ("deserialization", "O:8:\"stdClass\":0:{}"),
         ("csv_injection", "=cmd|' /C calc'!A0"),
