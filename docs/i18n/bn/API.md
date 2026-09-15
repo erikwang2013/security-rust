@@ -22,6 +22,8 @@ pub trait Detector {
 - `name()` — ডিটেক্টরের নাম (যেমন `"xss"`, `"sql_injection"`)
 - `detect()` — ইনপুট স্ক্যান করে, হিট হলে `Some(DetectionResult)` ফেরত দেয়, না হলে `None` ফেরত দেয়
 
+> `session` ও `throttle` ইচ্ছাকৃতভাবে এই trait প্রয়োগ করে না — তাদের ইনপুট মিশ্র (token + fingerprint + লোকেশন + সময়), যা `Detector::detect(&str)` প্রকাশ করতে পারে না। নিচে «স্টেটফুল মডিউল ও ঝুঁকি স্কোরিং» দেখুন।
+
 ## শনাক্তকরণ ফলাফলের গঠন
 
 ```rust
@@ -41,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### দ্রুত শুরু
@@ -50,7 +52,7 @@ security-rust = "1.0.4"
 use security_rust::Scanner;
 
 fn main() {
-    // শূন্য কনফিগারেশন: সব ২৭টি ডিটেক্টর একত্রিত হয়
+    // শূন্য কনফিগারেশন: সব ৩২টি ডিটেক্টর একত্রিত হয়
     let scanner = Scanner::default();
 
     // ইনপুট স্ক্যান করে, সব শনাক্ত হওয়া আক্রমণ ফেরত দেয়
@@ -98,16 +100,82 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+## স্টেটফুল মডিউল ও ঝুঁকি স্কোরিং
+
+এই তিনটি মডিউল সরাসরি ক্রেট রুট থেকে পাওয়া যায়। `session` ও `throttle` ইচ্ছাকৃতভাবে `Detector` trait প্রয়োগ করে না, কারণ তাদের ইনপুট মিশ্র। কোনো নতুন বাহ্যিক নির্ভরতা যোগ হয় না: token ও signature (MAC) কলার সরবরাহ করে, এবং লোকেশন পার্স করাও কলারের দায়িত্ব।
+
+### `session` — সেশন নিরাপত্তা
+
+```rust
+use security_rust::session::{MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let v = guard.bind(&ctx, now)?;        // Result<SessionVerdict, SessionError>
+let v = guard.verify(&ctx, now);       // SessionVerdict
+guard.revoke(token)?;                  // Result<(), StoreError>
+let n = guard.revoke_all(subject)?;    // Result<usize, StoreError>
+guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
+```
+
+- `RequestContext` ক্ষেত্র: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
+- `SessionVerdict` ক্ষেত্র: `decision`, `severity`, `threats`
+- `Decision`: `Allow` | `Challenge` | `Block`
+- স্টোর unavailable হলে ফলাফল `Decision::Block` (কারণ `StoreUnavailable`) — অর্থাৎ **fail-closed**, কোনো পথ খোলা থাকে না
+- `SessionConfig` ডিফল্ট: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300
+- স্টোর trait `SessionStore` দিয়ে বিমূর্ত, প্রস্তুত বাস্তবায়ন `MemoryStore`; মাল্টি-ইনস্ট্যান্স ডিপ্লয়ের জন্য এই trait Redis-এর জন্য বাস্তবায়ন করুন
+
+### `throttle` — রেট সীমা
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+
+match throttle.check(key, now) {
+    ThrottleDecision::Allow { remaining } => { /* অনুমোদিত */ }
+    ThrottleDecision::Banned { until } => { /* নিষিদ্ধ */ }
+    ThrottleDecision::Unavailable => { /* স্টোর unavailable */ }
+}
+throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+throttle.record_success(key)?;       // Result<(), StoreError>
+throttle.reset(key)?;                // Result<(), StoreError>
+throttle.purge_expired(now)?;        // Result<usize, StoreError>
+```
+
+- `ThrottleConfig` ডিফল্ট: `threshold` = 5, `window_secs` = 60, `ban_secs` = 900
+- **ইচ্ছাকৃত ব্যতিক্রম**: স্টোর ব্যর্থ হলে এটি `Banned` নয়, `Unavailable` ফেরত দেয় — রেট সীমা defense-in-depth, মূল প্রমাণীকরণের দরজা নয়; ব্যাকএন্ড গোলযোগে সব ব্যবহারকারীকে আটকানো নিজের বিরুদ্ধে DoS, আর সিদ্ধান্ত কলারের হাতে ছাড়া
+- স্টোর trait `ThrottleStore` দিয়ে বিমূর্ত, প্রস্তুত বাস্তবায়ন `MemoryThrottleStore`
+
+### `score` — ঝুঁকি স্কোরিং
+
+```rust
+use security_rust::assess;
+
+let results = Scanner::default().scan(input);
+let a = assess(&results);
+println!("{} {}", a.level, a.score);   // উদাহরণ: HIGH 40
+
+let a = Scanner::default().assess(input);  // সরাসরি RiskAssessment
+```
+
+- `RiskLevel`: `None` | `Low` | `Medium` | `High` | `Critical`
+- `RiskAssessment` ক্ষেত্র: `level`, `score`, `results` (সমবেত হওয়া হিটের সংখ্যা)
+- ওজন: Critical = 100, High = 40, Medium = 15, Low = 5
+
 ## মডিউল পাথ
 
 | মডিউল | পাথ | ডিটেক্টর সংখ্যা |
 |------|------|---------|
 | কোর | `src/lib.rs` `result.rs` `scanner.rs` | — |
-| ইনজেকশন | `src/injection/` | 10 |
-| প্রোটোকল | `src/protocol/` | 9 |
-| ডেটা | `src/data/` | 5 |
+| ইনজেকশন | `src/injection/` | 11 |
+| প্রোটোকল | `src/protocol/` | 11 |
+| ডেটা | `src/data/` | 7 |
 | ফাইল | `src/file/` | 3 |
+| সেশন | `src/session/` | — |
+| রেট সীমা | `src/throttle/` | — |
+| ঝুঁকি স্কোরিং | `src/score.rs` | — |
 
 ## পারফরম্যান্স
 
-Release বিল্ডে, একক ডিটেক্টর স্ক্যান প্রতি স্ক্যান ~100ns (RegexSet প্রি-কম্পাইলড), সম্পূর্ণ ২৭টি ডিটেক্টর স্ক্যান প্রতি স্ক্যান ~5μs। উচ্চ থ্রুপুট পরিস্থিতির জন্য উপযুক্ত (API গেটওয়ে, লগ পাইপলাইন)।
+Release বিল্ডে, regex প্যাটার্নগুলো `LazyLock` দিয়ে স্ট্যাটিকভাবে প্রি-কম্পাইল হয় এবং প্রথম ব্যবহারের পর আর পুনঃকম্পাইল হয় না; একটি regex স্ক্যানের খরচ শত-ন্যানোসেকেন্ড ক্রমের। ২৬ বাইট ইনপুটে সম্পূর্ণ ৩২টি ডিটেক্টরের স্ক্যান প্রায় ~50μs/বার (স্থানীয় পরিমাপ, regex সংখ্যা ও ইনপুট দৈর্ঘ্যের সাথে বাড়ে)। উচ্চ থ্রুপুট পরিস্থিতির জন্য উপযুক্ত (API গেটওয়ে, লগ পাইপলাইন)।

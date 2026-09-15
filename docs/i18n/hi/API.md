@@ -22,6 +22,8 @@ pub trait Detector {
 - `name()` — डिटेक्टर का नाम (जैसे `"xss"`, `"sql_injection"`)
 - `detect()` — इनपुट स्कैन करता है; हिट होने पर `Some(DetectionResult)` लौटाता है, न होने पर `None` लौटाता है
 
+> `session` और `throttle` जानबूझकर यह trait लागू नहीं करते — उनका इनपुट मिश्रित है (token + fingerprint + लोकेशन + समय), जिसे `Detector::detect(&str)` व्यक्त नहीं कर सकता। नीचे «स्टेटफुल मॉड्यूल और जोखिम स्कोरिंग» देखें।
+
 ## पहचान परिणाम संरचना
 
 ```rust
@@ -41,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### त्वरित शुरुआत
@@ -50,7 +52,7 @@ security-rust = "1.0.4"
 use security_rust::Scanner;
 
 fn main() {
-    // शून्य कॉन्फ़िगरेशन: सभी 27 डिटेक्टर इकट्ठा करें
+    // शून्य कॉन्फ़िगरेशन: सभी 32 डिटेक्टर इकट्ठा करें
     let scanner = Scanner::default();
 
     // इनपुट स्कैन करें, पता चले सभी हमले लौटाएँ
@@ -98,16 +100,82 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+## स्टेटफुल मॉड्यूल और जोखिम स्कोरिंग
+
+ये तीनों मॉड्यूल सीधे क्रेट रूट से उपलब्ध हैं। `session` और `throttle` जानबूझकर `Detector` trait लागू नहीं करते, क्योंकि उनका इनपुट मिश्रित है। कोई नई बाहरी निर्भरता नहीं जुड़ती: token और signature (MAC) कॉलर देता है, और लोकेशन पार्स करना भी कॉलर की ज़िम्मेदारी है।
+
+### `session` — सत्र सुरक्षा
+
+```rust
+use security_rust::session::{MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let v = guard.bind(&ctx, now)?;        // Result<SessionVerdict, SessionError>
+let v = guard.verify(&ctx, now);       // SessionVerdict
+guard.revoke(token)?;                  // Result<(), StoreError>
+let n = guard.revoke_all(subject)?;    // Result<usize, StoreError>
+guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
+```
+
+- `RequestContext` फ़ील्ड: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
+- `SessionVerdict` फ़ील्ड: `decision`, `severity`, `threats`
+- `Decision`: `Allow` | `Challenge` | `Block`
+- स्टोर उपलब्ध न होने पर परिणाम `Decision::Block` (कारण `StoreUnavailable`) होता है — यानी **fail-closed**, कोई रास्ता पार नहीं जाता
+- `SessionConfig` डिफ़ॉल्ट: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300
+- स्टोर trait `SessionStore` से अमूर्त है, तैयार कार्यान्वयन `MemoryStore`; मल्टी-इंस्टेंस डिप्लॉयमेंट के लिए यह trait Redis के लिए लागू करें
+
+### `throttle` — दर सीमित करना
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+
+match throttle.check(key, now) {
+    ThrottleDecision::Allow { remaining } => { /* अनुमति */ }
+    ThrottleDecision::Banned { until } => { /* प्रतिबंधित */ }
+    ThrottleDecision::Unavailable => { /* स्टोर उपलब्ध नहीं */ }
+}
+throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+throttle.record_success(key)?;       // Result<(), StoreError>
+throttle.reset(key)?;                // Result<(), StoreError>
+throttle.purge_expired(now)?;        // Result<usize, StoreError>
+```
+
+- `ThrottleConfig` डिफ़ॉल्ट: `threshold` = 5, `window_secs` = 60, `ban_secs` = 900
+- **जानबूझकर किया गया अपवाद**: स्टोर विफल होने पर यह `Banned` नहीं, `Unavailable` लौटाता है — दर सीमा defense-in-depth है, मुख्य प्रमाणीकरण द्वार नहीं; बैकएंड गड़बड़ी पर सभी उपयोगकर्ताओं को रोकना स्वयं के विरुद्ध DoS है, और निर्णय कॉलर पर छोड़ा गया है
+- स्टोर trait `ThrottleStore` से अमूर्त है, तैयार कार्यान्वयन `MemoryThrottleStore`
+
+### `score` — जोखिम स्कोरिंग
+
+```rust
+use security_rust::assess;
+
+let results = Scanner::default().scan(input);
+let a = assess(&results);
+println!("{} {}", a.level, a.score);   // उदाहरण: HIGH 40
+
+let a = Scanner::default().assess(input);  // सीधे RiskAssessment
+```
+
+- `RiskLevel`: `None` | `Low` | `Medium` | `High` | `Critical`
+- `RiskAssessment` फ़ील्ड: `level`, `score`, `results` (समेकन में शामिल हिट की संख्या)
+- भार: Critical = 100, High = 40, Medium = 15, Low = 5
+
 ## मॉड्यूल पथ
 
 | मॉड्यूल | पथ | डिटेक्टरों की संख्या |
 |------|------|---------|
 | कोर | `src/lib.rs` `result.rs` `scanner.rs` | — |
-| इंजेक्शन | `src/injection/` | 10 |
-| प्रोटोकॉल | `src/protocol/` | 9 |
-| डेटा | `src/data/` | 5 |
+| इंजेक्शन | `src/injection/` | 11 |
+| प्रोटोकॉल | `src/protocol/` | 11 |
+| डेटा | `src/data/` | 7 |
 | फ़ाइल | `src/file/` | 3 |
+| सत्र | `src/session/` | — |
+| दर सीमा | `src/throttle/` | — |
+| जोखिम स्कोरिंग | `src/score.rs` | — |
 
 ## प्रदर्शन
 
-Release बिल्ड में, एकल डिटेक्टर स्कैन ~100ns/बार (RegexSet प्रीकंपाइल्ड), सभी 27 डिटेक्टरों के साथ पूर्ण स्कैन ~5μs/बार। उच्च थ्रूपुट परिदृश्यों (API गेटवे, लॉग पाइपलाइन) के लिए उपयुक्त।
+Release बिल्ड में, regex पैटर्न `LazyLock` से स्थिर रूप से प्रीकंपाइल होते हैं और पहले उपयोग के बाद दोबारा कंपाइल नहीं होते; एकल regex स्कैन की लागत सौ-नैनोसेकंड के क्रम की है। 26 बाइट इनपुट पर सभी 32 डिटेक्टरों का पूर्ण स्कैन लगभग ~50μs/बार (स्थानीय मापन, regex संख्या और इनपुट लंबाई के साथ बढ़ता है)। उच्च थ्रूपुट परिदृश्यों (API गेटवे, लॉग पाइपलाइन) के लिए उपयुक्त।
