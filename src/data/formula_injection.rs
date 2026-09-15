@@ -8,19 +8,31 @@ use std::sync::LazyLock;
 // Medium），这边是精确层（只报能执行命令或外带数据的载荷，High）。
 // 因此 `=SUM(A1:A5)` 这类纯算术公式不算本检测器的目标——它够不到 shell
 // 也够不到网络，且已被粗粒度层兜住；重复报一遍只是噪音。
+// legacy `@` 前缀公式的函数名录。这里原来是"任意全大写标识符 + `(`"，于是
+// Java/Kotlin 注解（`@GET("/users")`、`@POST("/users")`）和待办标记
+// （`@TODO(清理临时文件)`）全被打成 High——注解在源码/日志里满地都是。
+// `regex` crate 没有反向断言，写不出"排除这几个名字"，只能反过来列公式函数。
+const AT_FUNCS: &str =
+    "SUM|HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC|AVERAGE|COUNT|MIN|MAX";
+
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // =cmd|' /C calc'!A0：命令管道。锚点带上单元格边界——CSV 一行多个字段，
-        // 载荷常出现在 `admin,=cmd|...` 这种第 2 个字段里
-        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][ \t]*cmd[ \t]*\|").unwrap(),
+        // 载荷常出现在 `admin,=cmd|...` 这种第 2 个字段里。
+        // `cmd` 后面必须紧跟 `|`：`- cmd | run the build` 是文档里的命令列表。
+        // 带空格的 `=cmd | ...!A0` 由下面第 3 条（要单元格引用）兜住。
+        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][ \t]*cmd\|").unwrap(),
         // 能外带数据或触发本地程序的内置函数
         Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][ \t]*(?:HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC)[ \t]*\(").unwrap(),
-        // 任意二进制 + DDE 单元格引用：=rundll32|...!A0、=2+5+cmd|...!A0
-        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][^\n|]{0,120}\|[^\n]{0,120}![A-Z]{1,3}\$?\d{1,5}").unwrap(),
+        // 任意二进制 + DDE 单元格引用：=rundll32|...!A0、=2+5+cmd|...!A0。
+        // `!A1` 前面必须是紧挨着的非空白字符（`'!A0`、`"!A0`）——散文里的
+        // `- 参见 RFC 1234 | 以及 !A1` 中间有空格，是文字不是单元格引用。
+        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][^\n|]{0,120}\|[^\n]{0,120}[^ \t\n]![A-Z]{1,3}\$?\d{1,5}").unwrap(),
         // DDE( 载荷
         Regex::new(r"(?i)\bDDE[ \t]*\(").unwrap(),
-        // legacy @ 前缀公式：@SUM( 等。故意不加 (?i)——小写 @media( 之类是 CSS
-        Regex::new(r"(?m)(?:^|[,;])[ \t]*@[ \t]*[A-Z][A-Z0-9.]{1,15}[ \t]*\(").unwrap(),
+        // legacy @ 前缀公式：@SUM( 等。故意不加 (?i)——小写 @media( 之类是 CSS。
+        // 函数名走名录，任意全大写标识符会命中注解。
+        Regex::new(&[r"(?m)(?:^|[,;])[ \t]*@[ \t]*(?:", AT_FUNCS, r")[ \t]*\("].concat()).unwrap(),
     ]
 });
 
@@ -109,6 +121,53 @@ mod tests {
             r.matched_pattern
         );
         assert_eq!(&csv[r.offset..r.offset + r.matched_pattern.len()], r.matched_pattern);
+    }
+
+    #[test]
+    fn ignores_doc_commands_and_annotations() {
+        // 文档里的命令列表：`cmd` 与 `|` 之间有空格，且没有单元格引用
+        for input in [
+            "- cmd | run the build",
+            "- CMD | echo hi",
+            "| cmd | 说明",
+        ] {
+            assert_clean(&det(), input);
+        }
+        // Java/Kotlin 注解与待办标记：全大写标识符 + `(` 不等于公式
+        for input in [
+            "@GET(\"/users\")",
+            "@POST(\"/users\")",
+            "@DELETE(\"/users/1\")",
+            "@TODO(清理临时文件)",
+            "@FIXME(x)",
+        ] {
+            assert_clean(&det(), input);
+        }
+        // 散文里恰好有 `!A1` 字样，但 `!` 前面是空格
+        assert_clean(&det(), "- 参见 RFC 1234 | 以及 !A1");
+    }
+
+    #[test]
+    fn spaced_cmd_pipe_still_caught_by_cell_ref_pattern() {
+        // `cmd` 与 `|` 之间有空格时第 1 条不报，但只要带 `!A0` 单元格引用，第 3 条兜住
+        for input in [
+            "=cmd|' /C calc'!A0",
+            "=cmd | ' /C calc'!A0",
+            "+cmd|'/C powershell'!A1",
+        ] {
+            assert_hit(input);
+        }
+    }
+
+    #[test]
+    fn legacy_at_functions_still_detected() {
+        for input in [
+            "@SUM(1+1)",
+            "@HYPERLINK(\"http://evil.com\")",
+            "@AVERAGE(B1:B9)",
+        ] {
+            assert_hit(input);
+        }
     }
 
     #[test]

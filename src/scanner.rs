@@ -11,7 +11,7 @@ use crate::injection::{
     SsiInjectionDetector, SstiDetector, XPathInjectionDetector, XssDetector,
 };
 use crate::protocol::{
-    CorsDetector, CrlfInjectionDetector, DnsRebindingDetector, HeaderInjectionDetector,
+    CorsDetector, DnsRebindingDetector, HeaderInjectionDetector,
     HostHeaderDetector, HttpParameterPollutionDetector, Log4ShellDetector, OpenRedirectDetector,
     RequestSmugglingDetector, SsrfDetector, WebSocketDetector, XxeDetector,
 };
@@ -50,7 +50,6 @@ impl Default for Scanner {
                 Box::new(DnsRebindingDetector),
                 Box::new(Log4ShellDetector),
                 Box::new(HttpParameterPollutionDetector),
-                Box::new(CrlfInjectionDetector),
                 // Data
                 Box::new(DeserializationDetector),
                 Box::new(CsvInjectionDetector),
@@ -135,8 +134,8 @@ mod tests {
     }
 
     #[test]
-    fn default_scanner_registers_all_33_detectors() {
-        assert_eq!(Scanner::default().detectors.len(), 33);
+    fn default_scanner_registers_all_32_detectors() {
+        assert_eq!(Scanner::default().detectors.len(), 32);
     }
 
     #[test]
@@ -159,14 +158,16 @@ mod tests {
             "formula_injection",
             "redos",
             "format_string",
-            "crlf_injection",
         ] {
             assert!(names.contains(&expected), "缺少检测器: {expected}");
         }
     }
 
+    /// 只覆盖新增的这几个检测器，不代表整个 scanner 对干净输入全静默
+    /// ——粗粒度层（csv_injection 认行首 `=+-@`、ssti 认 `${`）本来就会命中，
+    /// 判定"整机干净"要看 assess 的评分，别拿这个测试当整机基线。
     #[test]
-    fn new_detectors_do_not_fire_on_clean_input() {
+    fn new_detectors_only_do_not_fire_on_clean_input() {
         let scanner = Scanner::default();
         for input in [
             "the price is ${amount}",
@@ -179,7 +180,7 @@ mod tests {
             "line one\r\nline two",
             "5*(3+2)",
         ] {
-            let results = scanner.scan_with(input, &["log4shell", "hpp", "formula_injection", "redos", "format_string", "crlf_injection"]);
+            let results = scanner.scan_with(input, &["log4shell", "hpp", "formula_injection", "redos", "format_string"]);
             assert!(results.is_empty(), "新检测器误报 {input:?}: {:?}", types(&results));
         }
     }

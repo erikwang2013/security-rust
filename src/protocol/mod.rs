@@ -1,7 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 pub mod cors;
-pub mod crlf;
 pub mod dns_rebinding;
 pub mod header_injection;
 pub mod host_header;
@@ -14,7 +13,6 @@ pub mod websocket;
 pub mod xxe;
 
 pub use cors::CorsDetector;
-pub use crlf::CrlfInjectionDetector;
 pub use dns_rebinding::DnsRebindingDetector;
 pub use header_injection::HeaderInjectionDetector;
 pub use host_header::HostHeaderDetector;

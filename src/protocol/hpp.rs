@@ -7,12 +7,26 @@ use std::sync::LazyLock;
 // 分隔符混用：一层解析器把 `;` 当分隔符、另一层不当，于是 `?a=1&b=2;c=3`
 // 在第一层是 3 个参数、第二层只有 2 个（b 的值变成 "2;c=3"）。纯 `;` 分隔
 // 而全程无 `&` 不算污染——所有解析器结论一致，报了就是误杀。
+//
+// 两条约束防止把正常串打进来：
+//   1. 值里排除 `?`：`/app;jsessionid=abc?p=1&q=2` 的 `?` 之后才是查询串，
+//      前面的 `;jsessionid=` 是路径上的矩阵参数，不是分隔符混用。
+//   2. 混用的 `;k=v` 必须是一个完整参数（后面紧跟 `&` 或到串尾）。后面还接着
+//      空格/别的内容说明这不是查询串——`GET /a?x=1&y=2;z=3 HTTP/1.1` 是请求行，
+//      `;z=3` 后面跟着的是协议版本。
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)&[a-z0-9_%.\-]{1,64}=[^&;\s]{0,200};[a-z0-9_%.\-]{1,64}=").unwrap(),
-        Regex::new(r"(?i);[a-z0-9_%.\-]{1,64}=[^&;\s]{0,200}&[a-z0-9_%.\-]{1,64}=").unwrap(),
+        Regex::new(r"(?i)&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200};[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)").unwrap(),
+        Regex::new(r"(?i);[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}&[a-z0-9_%.\-]{1,64}=[^&;\s?]{0,200}(?:&|$)").unwrap(),
     ]
 });
+
+/// `;jsessionid=` 是 Java 容器的矩阵参数（URL 重写会话 ID）。出现它就说明这一层
+/// 的 `;` 是路径分隔符而非参数分隔符——只保留重复 key 判定，混用形态不再报。
+fn has_matrix_session(input: &str) -> bool {
+    const NEEDLE: &[u8] = b";jsessionid=";
+    input.as_bytes().windows(NEEDLE.len()).any(|w| w.eq_ignore_ascii_case(NEEDLE))
+}
 
 /// 同一 key 重复出现的位置。`regex` crate 无反向引用，纯正则表达不了
 /// "两个 key 相等"——只能退化成"任意两个参数"，那 `a=1&b=2` 也会报。
@@ -69,6 +83,9 @@ impl Detector for HttpParameterPollutionDetector {
                 message: "HTTP parameter pollution detected".into(),
             });
         }
+        if has_matrix_session(input) {
+            return None;
+        }
         regex_detect(&PATTERNS, self.name(), AttackCategory::Protocol, Severity::Medium, "HTTP parameter pollution detected", input)
     }
 }
@@ -121,6 +138,8 @@ mod tests {
             "a=1&b=2;c=3",
             "a=1;b=2&c=3",
             "?x=1&y=2;z=3",
+            "a=1&b=2;c=3&d=4",
+            "a=1;b=2&c=3&d=4",
         ] {
             assert_hit(input);
         }
@@ -137,6 +156,18 @@ mod tests {
         ] {
             assert_clean(&det(), input);
         }
+    }
+
+    #[test]
+    fn ignores_matrix_parameter_and_request_line() {
+        // `;jsessionid=` 是路径上的矩阵参数——`?` 之前的部分不是查询串
+        assert_clean(&det(), "http://x.com/app;jsessionid=ABC123?p=1&q=2");
+        assert_clean(&det(), "http://x.com/app;JSESSIONID=ABC123?p=1&q=2");
+        assert_clean(&det(), "http://x.com/app;jsessionid=ABC123&p=1");
+        // 请求行：`;z=3` 后面跟着协议版本，不是完整参数
+        assert_clean(&det(), "GET /a?x=1&y=2;z=3 HTTP/1.1");
+        // 混用的 `;k=v` 后面还有别的东西 = 散文
+        assert_clean(&det(), "a=1&b=2;c=3 说明");
     }
 
     #[test]
