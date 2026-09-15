@@ -4,7 +4,7 @@
 
 **🌐 [中文 (原文)](../../README.md)**
 
-Bibliothèque de détection d'attaques écrite en Rust, couvrant 4 grandes catégories — attaques par injection, attaques par protocole, attaques de données/sérialisation et fuites de fichiers/données sensibles — pour un total de 27 détecteurs. Aucune dépendance à un framework externe, analyse pure par chaîne de caractères.
+Bibliothèque de détection d'attaques écrite en Rust, couvrant 4 grandes catégories — attaques par injection, attaques par protocole, attaques de données/sérialisation et fuites de fichiers/données sensibles — pour un total de 32 détecteurs. Aucune dépendance à un framework externe : la chaîne de détecteurs travaille uniquement sur des chaînes, complétée par trois modules à état (voir ci-dessous).
 
 ---
 
@@ -12,13 +12,13 @@ Bibliothèque de détection d'attaques écrite en Rust, couvrant 4 grandes caté
 
 ### Pourquoi « détection » plutôt qu'« interception »
 
-Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle reçoit une chaîne de caractères et renvoie un résultat de détection structuré. Elle n'est liée à aucun framework Web, n'analyse pas les requêtes/réponses HTTP et ne met pas en œuvre de blocage en temps réel. Vous pouvez ainsi l'intégrer dans n'importe quelle chaîne : moteur de règles WAF, audit de journaux, validation en amont des passerelles API, outils CLI de scan de sécurité, etc.
+Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle reçoit une chaîne de caractères et renvoie un résultat de détection structuré. Elle n'est liée à aucun framework Web, n'analyse pas les requêtes/réponses HTTP et ne met pas en œuvre de blocage en temps réel. Vous pouvez ainsi l'intégrer dans n'importe quelle chaîne : moteur de règles WAF, audit de journaux, validation en amont des passerelles API, outils CLI de scan de sécurité, etc. Les modules `session`, `throttle` et `score` (voir ci-dessous) vont au-delà : ils conservent un état ou agrègent des signaux, sans pour autant dépendre d'un framework.
 
 ### Principes d'architecture
 
 - **Responsabilité unique** — chaque détecteur ne gère qu'un type d'attaque et contient en interne un ensemble de motifs de regex compilés
 - **Interface unifiée** — le trait `Detector` est le seul contrat de tous les détecteurs : `fn detect(&self, input: &str) -> Option<DetectionResult>`
-- **Couverture par défaut** — `Scanner::default()` assemble en une seule fois les 27 détecteurs, utilisable sans aucune configuration
+- **Couverture par défaut** — `Scanner::default()` assemble en une seule fois les 32 détecteurs, utilisable sans aucune configuration
 - **Configuration optionnelle** — `Scanner::builder()` permet une personnalisation à la demande, en assemblant sélectivement les détecteurs via `.with_detector()`
 
 ### Compromis
@@ -27,7 +27,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 |------|------|------|
 | Regex vs analyseur | Regex | Dans un scénario de détection, la vitesse prime ; les regex offrent une meilleure couverture des variantes/contournements |
 | Premier signalé vs détection complète | Détection complète | Une entrée peut déclencher simultanément plusieurs types d'attaques, aucune ne doit être manquée |
-| Zéro dépendance vs introduction de serde | Zéro dépendance | Dépend uniquement de `regex` + `thiserror`, compilation rapide et taille réduite |
+| Zéro dépendance vs introduction de serde | Zéro dépendance | Dépend uniquement de `regex`, compilation rapide et taille réduite |
 
 ---
 
@@ -45,7 +45,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
                        │  │   Vec<Box<dyn Detector>>   │  │
                        │  │   ├─ XssDetector           │  │
                        │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×27               │  │
+                       │  │   ├─ ... ×32               │  │
                        │  └────────────────────────────┘  │
                        └──────────────┬───────────────────┘
                                       │
@@ -60,7 +60,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
        │              │              │
   ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
   │injection│  │  protocol   │  │  data  │  │  file   │
-  │  10 个  │  │   9 个      │  │ 5 个   │  │  3 个   │
+  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
   └─────────┘  └─────────────┘  └────────┘  └─────────┘
 ```
 
@@ -69,9 +69,9 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | Module | Chemin | Nombre de détecteurs | Rôle |
 |------|------|---------|------|
 | Noyau | `src/lib.rs` `result.rs` `scanner.rs` | — | Trait `Detector`, `DetectionResult`, `Scanner`/`ScannerBuilder` |
-| Injection | `src/injection/` | 10 | XSS, injection SQL, injection de commandes, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI |
-| Protocole | `src/protocol/` | 9 | SSRF, XXE, injection d'en-têtes, attaque de l'en-tête Host, contrebande de requêtes, redirection ouverte, CORS, WebSocket, DNS rebinding |
-| Données | `src/data/` | 5 | Désérialisation PHP, injection de formules CSV, injection d'en-têtes de courriel, attaques JWT, pollution des prototypes |
+| Injection | `src/injection/` | 11 | XSS, injection SQL, injection de commandes, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI, chaîne de format |
+| Protocole | `src/protocol/` | 11 | SSRF, XXE, injection d'en-têtes, attaque de l'en-tête Host, contrebande de requêtes, redirection ouverte, CORS, WebSocket, DNS rebinding, Log4Shell, pollution de paramètres HTTP |
+| Données | `src/data/` | 7 | Désérialisation PHP, injection de formules CSV, injection d'en-têtes de courriel, attaques JWT, pollution des prototypes, injection de formules, ReDoS |
 | Fichiers | `src/file/` | 3 | Traversée de chemins, téléversement de fichiers malveillants, fuite de données sensibles |
 
 ### Structure du résultat de détection
@@ -82,7 +82,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 
 ## Fonctionnalités implémentées
 
-### Attaques par injection (10 détecteurs)
+### Attaques par injection (11 détecteurs)
 
 | Détecteur | Motifs couverts | Sévérité |
 |--------|---------|--------|
@@ -96,8 +96,9 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **ssi_injection** | Exécution de commande `<!--#exec cmd=`, inclusion de fichier `<!--#include file=`, sortie de variable `<!--#echo var=`, informations de fichier `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Requêtes d'introspection `__schema`/`__type`, DoS par imbrication profonde (≥ 5 niveaux) | Medium |
 | **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, évasion de sandbox Python via MRO `__mro__`/`__subclasses__()` | Critical |
+| **format_string** | spécificateurs d'écriture `%n` (y compris avec modificateurs de longueur), largeurs démesurées `%123456d`, spécificateurs `%x`/`%p`/`%s` répétés (fuite de chaîne de format / corruption mémoire) | Medium |
 
-### Attaques par protocole et requêtes (9 détecteurs)
+### Attaques par protocole et requêtes (11 détecteurs)
 
 | Détecteur | Motifs couverts | Sévérité |
 |--------|---------|--------|
@@ -110,8 +111,10 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **cors** | Contournement `Origin: null`, combinaison `Access-Control-Allow-Origin: *` + Credentials | Medium |
 | **websocket** | Poignée de main `Upgrade: websocket`, WS interdomaines `Origin: null`, connexion en clair `ws://` | High |
 | **dns_rebinding** | En-tête Host vers IP internes `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
+| **log4shell** | obfuscation de lookup `${lower:j}`/`${upper:j}`, obfuscation par chaîne vide `${::-j}`, lookups imbriqués `${${...}:...}`, variante encodée en URL `%24%7b...%7d...ndi` | Critical |
+| **hpp** | mélange de séparateurs dans la chaîne de requête `&a=1;b=2` et `;a=1&b=2` (pollution de paramètres par divergence d'analyseurs) | Medium |
 
-### Attaques de données et sérialisation (5 détecteurs)
+### Attaques de données et sérialisation (7 détecteurs)
 
 | Détecteur | Motifs couverts | Sévérité |
 |--------|---------|--------|
@@ -120,6 +123,8 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **mail_header** | Injection en copie cachée `Bcc:`/`Cc:`, expéditeurs multiples `From:`, injection d'en-têtes MIME `MIME-Version:`/`Content-Type: multipart`, manipulation de limite `boundary=` | Medium |
 | **jwt_attack** | Contournement par algorithme vide `alg: none`, injection de traversée de chemins `kid`, segment de signature vide, segment de payload vide | High |
 | **prototype_pollution** | Pollution de chaîne de prototypes `__proto__`/`constructor.prototype`, détournement de propriétés `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
+| **formula_injection** | caractères de formule en début de champ avec pipe de commande `=cmd|`, fonctions de tableur dangereuses `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltration via `|` + référence de cellule `A0`, appels `DDE(`, fonctions `@` | High |
+| **redos** | retour arrière catastrophique : quantificateurs imbriqués `(a+)+`/`(a{2,})+`, alternatives qui se chevauchent `(a|ab)+`, quantificateur sur un groupe `\w`/`\d`/`.` | Medium |
 
 ### Fichiers et données sensibles (3 détecteurs)
 
@@ -128,6 +133,22 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **path_traversal** | Remontée de répertoire `../`/`..\\`, contournement par encodage URL `%2e%2e`, wrappers de protocole `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, troncature par octet nul `%00` | Critical |
 | **upload** | Balises PHP `<?php`/`<?=`, balises ASP `<%@`/`<%=`, motifs de backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobales `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, contournement par encodage `base64_decode()` | Critical |
 | **data_leak** | PAN de carte de crédit à 16 chiffres (Visa/MasterCard/AmEx/Discover/JCB/Diners), clés d'accès AWS `AKIA...`, en-têtes de clé privée PEM `-----BEGIN`, clés API OpenAI/LLM `sk-...`, chaînes de connexion de base de données `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, jeton JWT | Critical |
+
+---
+
+## Modules à état
+
+`session`, `throttle` et `score` ne sont **pas** des implémentations de `Detector`. `session` et `throttle` sont à état et liés à une identité — `Detector::detect(&self, input: &str)` ne peut pas exprimer une entrée composite faite de jeton, d'empreinte, de position et de temps. Ils se placent donc à côté de la chaîne de détecteurs, pas dedans.
+
+| Module | Type | Rôle |
+|------|------|------|
+| `session` | `SessionGuard<S: SessionStore>` | Sécurité de session : détournement de client, altération de données, connexion depuis un lieu inhabituel, sessions à jeton. Méthodes `bind`/`verify`/`revoke`/`revoke_all`/`rotate` ; `Decision { Allow, Challenge, Block }` + `SessionThreat` ; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300) ; trait `SessionStore` + `MemoryStore` |
+| `throttle` | `Throttle<S: ThrottleStore>` | Limitation de débit et bannissement : fenêtre glissante, bannissement par seuil, verrouillage de compte. Méthodes `check`/`record_failure`/`record_success`/`reset`/`purge_expired` ; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }` ; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Évaluation du risque : agrège des signaux isolés de faible gravité en une grandeur mesurable. `RiskLevel { None, Low, Medium, High, Critical }` |
+
+**L'asymétrie en cas de panne est volontaire.** `SessionGuard` renvoie `Decision::Block` (`StoreUnavailable`) si le stockage défaille — fail-closed, jamais de passage. `Throttle` est l'exception assumée : la limitation de débit relève de la défense en profondeur et non d'une barrière d'authentification principale ; une panne du backend renvoie donc `ThrottleDecision::Unavailable` et non `Banned` — bloquer tout le monde serait un auto-DoS. La décision appartient à l'appelant.
+
+**Toujours aucune nouvelle dépendance :** la liste se limite à `regex`. Le prix à payer : le jeton et la signature sont fournis par l'appelant, les positions sont analysées par l'appelant. Les deux modules abstrayent leur stockage derrière un trait — pour un déploiement multi-instances, il suffit d'implémenter `SessionStore`/`ThrottleStore` sur Redis.
 
 ---
 
@@ -153,7 +174,7 @@ La référence API complète (installation, scan sélectif, configuration person
 # Construction
 cargo build --release
 
-# Tests (46 tests d'intégration)
+# Tests (462 tests : 354 unitaires, 46 d'intégration, 62 de module)
 cargo test
 
 # Vérification du code

@@ -4,7 +4,7 @@
 
 **🌐 [中文 (原文)](../../README.md)**
 
-Librería de detección de ataques escrita en Rust, que cubre 27 detectores en 4 grandes categorías: ataques de inyección, ataques de protocolo, ataques de datos/serialización y fuga de archivos/datos sensibles. Cero dependencias de frameworks externos, escaneo puro de cadenas.
+Librería de detección de ataques escrita en Rust, que cubre 32 detectores en 4 grandes categorías: ataques de inyección, ataques de protocolo, ataques de datos/serialización y fuga de archivos/datos sensibles. Cero dependencias de frameworks externos: la cadena de detectores trabaja solo con cadenas y se complementa con tres módulos con estado (ver más abajo).
 
 ---
 
@@ -12,13 +12,13 @@ Librería de detección de ataques escrita en Rust, que cubre 27 detectores en 4
 
 ### Por qué «detección» en lugar de «bloqueo»
 
-Esta librería se posiciona como un **escáner de entrada puro**: recibe una cadena y devuelve resultados de detección estructurados. No está vinculada a ningún framework web, no analiza peticiones/respuestas HTTP ni implementa bloqueo en tiempo real. De esta forma puedes integrarla en cualquier cadena: motores de reglas WAF, auditoría de logs, validación previa en puertas de enlace de API, herramientas CLI de escaneo de seguridad, etc.
+Esta librería se posiciona como un **escáner de entrada puro**: recibe una cadena y devuelve resultados de detección estructurados. No está vinculada a ningún framework web, no analiza peticiones/respuestas HTTP ni implementa bloqueo en tiempo real. De esta forma puedes integrarla en cualquier cadena: motores de reglas WAF, auditoría de logs, validación previa en puertas de enlace de API, herramientas CLI de escaneo de seguridad, etc. Los módulos `session`, `throttle` y `score` (ver más abajo) van más allá: mantienen estado o agregan señales, y siguen sin depender de ningún framework.
 
 ### Principios de arquitectura
 
 - **Responsabilidad única** — cada detector se ocupa de un solo tipo de ataque y mantiene internamente un conjunto compilado de patrones de expresiones regulares
 - **Interfaz unificada** — el trait `Detector` es el único contrato de todos los detectores: `fn detect(&self, input: &str) -> Option<DetectionResult>`
-- **Cobertura por defecto** — `Scanner::default()` ensambla los 27 detectores de una sola vez, utilizable con cero configuración
+- **Cobertura por defecto** — `Scanner::default()` ensambla los 32 detectores de una sola vez, utilizable con cero configuración
 - **Configuración opcional** — `Scanner::builder()` permite personalizar a demanda, ensamblando selectivamente detectores con `.with_detector()`
 
 ### Compromisos
@@ -27,7 +27,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 |------|------|------|
 | Expresiones regulares vs parser | Expresiones regulares | En escenarios de detección la velocidad es prioritaria; las expresiones regulares ofrecen mejor cobertura de patrones ofuscados/evasivos |
 | Primero que llega vs detección completa | Detección completa | Una entrada puede disparar varios tipos de ataque a la vez; no deben producirse falsos negativos |
-| Cero dependencias vs introducir serde | Cero dependencias | Solo depende de `regex` + `thiserror`; compilación rápida, tamaño reducido |
+| Cero dependencias vs introducir serde | Cero dependencias | Solo depende de `regex`; compilación rápida, tamaño reducido |
 
 ---
 
@@ -45,7 +45,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
                        │  │   Vec<Box<dyn Detector>>   │  │
                        │  │   ├─ XssDetector           │  │
                        │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×27               │  │
+                       │  │   ├─ ... ×32               │  │
                        │  └────────────────────────────┘  │
                        └──────────────┬───────────────────┘
                                       │
@@ -60,7 +60,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
        │              │              │
   ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
   │injection│  │  protocol   │  │  data  │  │  file   │
-  │  10 个  │  │   9 个      │  │ 5 个   │  │  3 个   │
+  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
   └─────────┘  └─────────────┘  └────────┘  └─────────┘
 ```
 
@@ -69,9 +69,9 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | Módulo | Ruta | N.º de detectores | Responsabilidad |
 |------|------|---------|------|
 | Núcleo | `src/lib.rs` `result.rs` `scanner.rs` | — | Trait `Detector`, `DetectionResult`, `Scanner`/`ScannerBuilder` |
-| Inyección | `src/injection/` | 10 | XSS, inyección SQL, inyección de comandos, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI |
-| Protocolo | `src/protocol/` | 9 | SSRF, XXE, inyección de cabeceras, ataque de Host header, contrabando de peticiones, redirección abierta, CORS, WebSocket, DNS rebinding |
-| Datos | `src/data/` | 5 | Deserialización PHP, inyección de fórmulas CSV, inyección de cabeceras de correo, ataques JWT, contaminación de prototipos |
+| Inyección | `src/injection/` | 11 | XSS, inyección SQL, inyección de comandos, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI, cadena de formato |
+| Protocolo | `src/protocol/` | 11 | SSRF, XXE, inyección de cabeceras, ataque de Host header, contrabando de peticiones, redirección abierta, CORS, WebSocket, DNS rebinding, Log4Shell, contaminación de parámetros HTTP |
+| Datos | `src/data/` | 7 | Deserialización PHP, inyección de fórmulas CSV, inyección de cabeceras de correo, ataques JWT, contaminación de prototipos, inyección de fórmulas, ReDoS |
 | Archivos | `src/file/` | 3 | Path traversal, subida de archivos maliciosos, fuga de datos sensibles |
 
 ### Estructura del resultado de detección
@@ -82,7 +82,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 
 ## Funcionalidades implementadas
 
-### Ataques de inyección (10 detectores)
+### Ataques de inyección (11 detectores)
 
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
@@ -96,8 +96,9 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **ssi_injection** | Ejecución de comandos `<!--#exec cmd=`, inclusión de archivos `<!--#include file=`, salida de variables `<!--#echo var=`, información de archivos `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Consultas de introspección `__schema`/`__type`, DoS por anidamiento profundo (≥5 niveles) | Medium |
 | **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, escape de sandbox Python MRO `__mro__`/`__subclasses__()` | Critical |
+| **format_string** | especificadores de escritura `%n` (también con modificadores de longitud), anchos desmesurados `%123456d`, especificadores `%x`/`%p`/`%s` repetidos (fuga de cadena de formato / corrupción de memoria) | Medium |
 
-### Ataques de protocolo y peticiones (9 detectores)
+### Ataques de protocolo y peticiones (11 detectores)
 
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
@@ -110,8 +111,10 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **cors** | Bypass `Origin: null`, combinación `Access-Control-Allow-Origin: *` + Credentials | Medium |
 | **websocket** | Handshake `Upgrade: websocket`, WS entre dominios `Origin: null`, conexiones en claro `ws://` | High |
 | **dns_rebinding** | Host header con IPs internas `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
+| **log4shell** | ofuscación de lookup `${lower:j}`/`${upper:j}`, ofuscación con cadena vacía `${::-j}`, lookups anidados `${${...}:...}`, variante codificada en URL `%24%7b...%7d...ndi` | Critical |
+| **hpp** | mezcla de separadores en la cadena de consulta `&a=1;b=2` y `;a=1&b=2` (contaminación de parámetros por divergencia entre analizadores) | Medium |
 
-### Ataques de datos y serialización (5 detectores)
+### Ataques de datos y serialización (7 detectores)
 
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
@@ -120,6 +123,8 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **mail_header** | Inyección en copia oculta `Bcc:`/`Cc:`, múltiples remitentes `From:`, inyección de cabeceras MIME `MIME-Version:`/`Content-Type: multipart`, manipulación de límite `boundary=` | Medium |
 | **jwt_attack** | Bypass con algoritmo vacío `alg: none`, inyección de path traversal en `kid`, segmento de firma vacío, segmento de payload vacío | High |
 | **prototype_pollution** | Contaminación de la cadena de prototipos `__proto__`/`constructor.prototype`, secuestro de propiedades `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
+| **formula_injection** | caracteres de fórmula al inicio del campo con tubería de comando `=cmd|`, funciones de hoja de cálculo peligrosas `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltración vía `|` + referencia de celda `A0`, llamadas `DDE(`, funciones `@` | High |
+| **redos** | retroceso catastrófico: cuantificadores anidados `(a+)+`/`(a{2,})+`, alternativas solapadas `(a|ab)+`, cuantificador sobre un grupo `\w`/`\d`/`.` | Medium |
 
 ### Archivos y datos sensibles (3 detectores)
 
@@ -128,6 +133,22 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **path_traversal** | Escape de directorios `../`/`..\\`, bypass por codificación URL `%2e%2e`, wrappers de protocolo `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncamiento con byte nulo `%00` | Critical |
 | **upload** | Etiquetas PHP `<?php`/`<?=`, etiquetas ASP `<%@`/`<%=`, patrones de backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobales `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, bypass por `base64_decode()` | Critical |
 | **data_leak** | PAN de tarjetas de crédito de 16 dígitos (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, cabecera de claves privadas PEM `-----BEGIN`, API Keys OpenAI/LLM `sk-...`, cadenas de conexión a bases de datos `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, tokens JWT | Critical |
+
+---
+
+## Módulos con estado
+
+`session`, `throttle` y `score` **no** son implementaciones de `Detector`. `session` y `throttle` tienen estado y están ligados a una identidad: `Detector::detect(&self, input: &str)` no puede expresar una entrada compuesta de token, huella, posición y tiempo. Por eso se sitúan junto a la cadena de detectores, no dentro de ella.
+
+| Módulo | Tipo | Responsabilidad |
+|------|------|------|
+| `session` | `SessionGuard<S: SessionStore>` | Seguridad de sesión: secuestro de cliente, manipulación de datos, inicio de sesión desde una ubicación inusual, sesiones con token. Métodos `bind`/`verify`/`revoke`/`revoke_all`/`rotate`; `Decision { Allow, Challenge, Block }` + `SessionThreat`; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300); trait `SessionStore` + `MemoryStore` |
+| `throttle` | `Throttle<S: ThrottleStore>` | Limitación de tasa y bloqueo: ventana deslizante, bloqueo por umbral, bloqueo de cuenta. Métodos `check`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Evaluación de riesgo: agrega señales sueltas de baja gravedad en una magnitud medible. `RiskLevel { None, Low, Medium, High, Critical }` |
+
+**La asimetría ante fallos es deliberada.** `SessionGuard` devuelve `Decision::Block` (`StoreUnavailable`) si el almacenamiento falla: fail-closed, nunca deja pasar. `Throttle` es la excepción consciente: la limitación de tasa es defensa en profundidad y no una barrera de autenticación principal, así que un fallo del backend devuelve `ThrottleDecision::Unavailable` y no `Banned` — bloquear a todos los usuarios sería un auto-DoS. La decisión queda en manos del llamador.
+
+**Sigue sin haber dependencias nuevas:** la lista se limita a `regex`. El precio: el token y la firma los aporta el llamador, y las posiciones las procesa el llamador. Ambos módulos abstraen su almacenamiento tras un trait; para despliegues con varias instancias basta con implementar `SessionStore`/`ThrottleStore` sobre Redis.
 
 ---
 
@@ -153,7 +174,7 @@ La referencia completa de la API (instalación, escaneo selectivo, configuració
 # Compilar
 cargo build --release
 
-# Pruebas (46 pruebas de integración)
+# Pruebas (462 pruebas: 354 unitarias, 46 de integración, 62 de módulo)
 cargo test
 
 # Revisión de código

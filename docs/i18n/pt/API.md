@@ -41,7 +41,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### Início Rápido
@@ -50,7 +50,7 @@ security-rust = "1.0.4"
 use security_rust::Scanner;
 
 fn main() {
-    // Zero configuração: monta todos os 27 detectores
+    // Zero configuração: monta todos os 32 detectores
     let scanner = Scanner::default();
 
     // Escaneia a entrada, retorna todos os ataques detectados
@@ -98,16 +98,72 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+## Módulos com Estado
+
+`session` e `throttle` **não** implementam o trait `Detector` de propósito: têm estado e estão ligados a uma identidade, e `Detector::detect(&self, input: &str)` não consegue expressar uma entrada composta de token, impressão digital, posição e tempo. `score` é um cálculo puro sobre `DetectionResult`.
+
+```rust
+use security_rust::{
+    Decision, MemoryStore, MemoryThrottleStore, Scanner,
+    SessionConfig, SessionGuard, SessionVerdict,
+    Throttle, ThrottleConfig, ThrottleDecision,
+};
+
+// Proteção de sessão — fail-closed: Decision::Block se o armazenamento falhar
+let sessions = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+let verdict: SessionVerdict = sessions.verify(&ctx, now);
+if verdict.decision == Decision::Block {
+    // recusar
+}
+
+// Limitação de taxa — defesa em profundidade: Unavailable na falha, não Banned
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+match throttle.check("user:42", now) {
+    ThrottleDecision::Allow { remaining: 0 } => { /* recusar: cota esgotada */ }
+    ThrottleDecision::Allow { .. } => { /* deixar passar */ }
+    ThrottleDecision::Banned { until } => { /* banido até `until` */ }
+    ThrottleDecision::Unavailable => { /* decidir por conta própria */ }
+}
+
+// Avaliação de risco: agregar sinais isolados em uma grandeza mensurável
+let risk = Scanner::default().assess(input);
+```
+
+| Elemento | Assinatura / campo |
+|------|------|
+| `SessionGuard::bind` | `fn bind(&self, ctx: &RequestContext, now: u64) -> Result<SessionVerdict, SessionError>` |
+| `SessionGuard::verify` | `fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict` |
+| `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
+| `SessionGuard::rotate` | renova o token de uma sessão |
+| `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
+| `SessionVerdict` | `decision: Decision`, `severity: Severity`, `threats: Vec<SessionThreat>` |
+| `Decision` | `Allow` \| `Challenge` \| `Block` |
+| `SessionConfig` | `ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300 |
+| `SessionStore` | trait do armazenamento de sessões; `MemoryStore` é a implementação em memória fornecida |
+| `Throttle::check` | `fn check(&self, key: &str, now: u64) -> ThrottleDecision` |
+| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>` |
+| `Throttle::record_success` / `reset` / `purge_expired` | `fn record_success(&self, key: &str) -> Result<(), StoreError>` / `fn reset(&self, key: &str) -> Result<(), StoreError>` / `fn purge_expired(&self, now: u64) -> Result<usize, StoreError>` |
+| `ThrottleConfig` | `threshold` 5, `window_secs` 60, `ban_secs` 900 |
+| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` |
+| `ThrottleStore` | trait do armazenamento de contadores; `MemoryThrottleStore` é a implementação em memória fornecida |
+| `RiskLevel` | `None` \| `Low` \| `Medium` \| `High` \| `Critical` |
+| `RiskAssessment` | resultado de `Scanner::assess` |
+| `Scanner::assess` | `fn assess(&self, input: &str) -> RiskAssessment` |
+
+Atenção: `ThrottleDecision::Allow { remaining: 0 }` significa que **esta** requisição deve ser recusada — a cota acabou, e não «ainda resta uma tentativa». A variante se chama `Allow` e não `Banned` porque nesse instante não há banimento ativo.
+
+O chamador preenche um `RequestContext` por completo: a biblioteca não traz uma base geográfica nem valida assinaturas; apenas compara os valores recebidos com a base registrada no `bind`.
+
 ## Caminhos de Módulos
 
 | Módulo | Caminho | Nº de detectores |
 |------|------|---------|
 | Núcleo | `src/lib.rs` `result.rs` `scanner.rs` | — |
-| Injeção | `src/injection/` | 10 |
-| Protocolo | `src/protocol/` | 9 |
-| Dados | `src/data/` | 5 |
+| Injeção | `src/injection/` | 11 |
+| Protocolo | `src/protocol/` | 11 |
+| Dados | `src/data/` | 7 |
 | Arquivos | `src/file/` | 3 |
 
 ## Desempenho
 
-Em builds de release, a varredura com um único detector leva ~100ns/varredura (RegexSet pré-compilado), e a varredura completa com os 27 detectores leva aproximadamente ~5μs/varredura. Adequado para cenários de alto throughput (gateways de API, pipelines de log).
+Em builds de release, a varredura com um único detector leva ~100ns/varredura (RegexSet pré-compilado), e a varredura completa com os 32 detectores leva aproximadamente ~5μs/varredura. Adequado para cenários de alto throughput (gateways de API, pipelines de log).

@@ -41,7 +41,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### Быстрый старт
@@ -50,7 +50,7 @@ security-rust = "1.0.4"
 use security_rust::Scanner;
 
 fn main() {
-    // Ноль настроек: собирает все 27 детекторов
+    // Ноль настроек: собирает все 32 детекторов
     let scanner = Scanner::default();
 
     // Сканирует входные данные и возвращает все обнаруженные атаки
@@ -98,16 +98,72 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+## Модули с состоянием
+
+`session` и `throttle` **намеренно не** реализуют трейт `Detector`: они хранят состояние и привязаны к идентичности, а `Detector::detect(&self, input: &str)` не способен выразить составной вход из токена, отпечатка, местоположения и времени. `score` — чистый расчёт над `DetectionResult`.
+
+```rust
+use security_rust::{
+    Decision, MemoryStore, MemoryThrottleStore, Scanner,
+    SessionConfig, SessionGuard, SessionVerdict,
+    Throttle, ThrottleConfig, ThrottleDecision,
+};
+
+// Защита сессии — fail-closed: Decision::Block при отказе хранилища
+let sessions = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+let verdict: SessionVerdict = sessions.verify(&ctx, now);
+if verdict.decision == Decision::Block {
+    // отклонить
+}
+
+// Ограничение частоты — эшелонированная защита: при сбое Unavailable, а не Banned
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+match throttle.check("user:42", now) {
+    ThrottleDecision::Allow { remaining: 0 } => { /* отклонить: лимит исчерпан */ }
+    ThrottleDecision::Allow { .. } => { /* пропустить */ }
+    ThrottleDecision::Banned { until } => { /* бан до `until` */ }
+    ThrottleDecision::Unavailable => { /* решать самостоятельно */ }
+}
+
+// Оценка риска: агрегировать отдельные сигналы в измеримую величину
+let risk = Scanner::default().assess(input);
+```
+
+| Элемент | Сигнатура / поле |
+|------|------|
+| `SessionGuard::bind` | `fn bind(&self, ctx: &RequestContext, now: u64) -> Result<SessionVerdict, SessionError>` |
+| `SessionGuard::verify` | `fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict` |
+| `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
+| `SessionGuard::rotate` | обновляет токен сессии |
+| `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
+| `SessionVerdict` | `decision: Decision`, `severity: Severity`, `threats: Vec<SessionThreat>` |
+| `Decision` | `Allow` \| `Challenge` \| `Block` |
+| `SessionConfig` | `ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300 |
+| `SessionStore` | трейт хранилища сессий; `MemoryStore` — встроенная реализация в памяти |
+| `Throttle::check` | `fn check(&self, key: &str, now: u64) -> ThrottleDecision` |
+| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>` |
+| `Throttle::record_success` / `reset` / `purge_expired` | `fn record_success(&self, key: &str) -> Result<(), StoreError>` / `fn reset(&self, key: &str) -> Result<(), StoreError>` / `fn purge_expired(&self, now: u64) -> Result<usize, StoreError>` |
+| `ThrottleConfig` | `threshold` 5, `window_secs` 60, `ban_secs` 900 |
+| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` |
+| `ThrottleStore` | трейт хранилища счётчиков; `MemoryThrottleStore` — встроенная реализация в памяти |
+| `RiskLevel` | `None` \| `Low` \| `Medium` \| `High` \| `Critical` |
+| `RiskAssessment` | результат `Scanner::assess` |
+| `Scanner::assess` | `fn assess(&self, input: &str) -> RiskAssessment` |
+
+Обратите внимание: `ThrottleDecision::Allow { remaining: 0 }` означает, что **этот** запрос нужно отклонить — лимит исчерпан, а не «осталась ещё одна попытка». Ветка называется `Allow`, а не `Banned`, потому что в этот момент бан не действует.
+
+`RequestContext` целиком заполняет вызывающая сторона: библиотека не содержит геобазы и не проверяет подписи — она лишь сравнивает переданные значения с базой, сохранённой при `bind`.
+
 ## Пути модулей
 
 | Модуль | Путь | Кол-во детекторов |
 |--------|------|-------------------|
 | Ядро | `src/lib.rs` `result.rs` `scanner.rs` | — |
-| Инъекции | `src/injection/` | 10 |
-| Протокол | `src/protocol/` | 9 |
-| Данные | `src/data/` | 5 |
+| Инъекции | `src/injection/` | 11 |
+| Протокол | `src/protocol/` | 11 |
+| Данные | `src/data/` | 7 |
 | Файлы | `src/file/` | 3 |
 
 ## Производительность
 
-В release-сборке сканирование одним детектором занимает ~100 нс/раз (прекомпиляция RegexSet), полное сканирование всеми 27 детекторами — ~5 мкс/раз. Подходит для сценариев с высокой пропускной способностью (API-шлюзы, конвейеры логов).
+В release-сборке сканирование одним детектором занимает ~100 нс/раз (прекомпиляция RegexSet), полное сканирование всеми 32 детекторами — ~5 мкс/раз. Подходит для сценариев с высокой пропускной способностью (API-шлюзы, конвейеры логов).

@@ -4,7 +4,7 @@
 
 **🌐 [中文 (原文)](../../README.md)**
 
-In Rust geschriebene Angriffserkennungsbibliothek, die 27 Detektoren in vier Kategorien abdeckt: Injection-Angriffe, Protokollangriffe, Daten-/Serialisierungsangriffe sowie Datei-/Datenlecks. Keine externen Framework-Abhängigkeiten, reine String-Scans.
+In Rust geschriebene Angriffserkennungsbibliothek, die 32 Detektoren in vier Kategorien abdeckt: Injection-Angriffe, Protokollangriffe, Daten-/Serialisierungsangriffe sowie Datei-/Datenlecks. Keine externen Framework-Abhängigkeiten: Die Detektor-Kette arbeitet rein auf Strings, ergänzt um drei zustandsbehaftete Module (siehe unten).
 
 ---
 
@@ -12,13 +12,13 @@ In Rust geschriebene Angriffserkennungsbibliothek, die 27 Detektoren in vier Kat
 
 ### Warum „Erkennung" statt „Blockierung"
 
-Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt Strings und liefert strukturierte Erkennungsergebnisse. Sie ist an kein Web-Framework gebunden, führt keine HTTP-Request-/Response-Analyse durch und implementiert keine Echtzeit-Blockierung. Dadurch lässt sie sich in jede Kette einbetten: WAF-Regel-Engines, Log-Audits, vorgelagerte Validierung in API-Gateways, CLI-Sicherheits-Scan-Tools usw.
+Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt Strings und liefert strukturierte Erkennungsergebnisse. Sie ist an kein Web-Framework gebunden, führt keine HTTP-Request-/Response-Analyse durch und implementiert keine Echtzeit-Blockierung. Dadurch lässt sie sich in jede Kette einbetten: WAF-Regel-Engines, Log-Audits, vorgelagerte Validierung in API-Gateways, CLI-Sicherheits-Scan-Tools usw. Die Module `session`, `throttle` und `score` (siehe unten) gehen darüber hinaus: Sie halten Zustand bzw. aggregieren Signale, bleiben aber ebenfalls frei von Framework-Bindungen.
 
 ### Architekturprinzipien
 
 - **Einzelverantwortung** — jeder Detektor kümmert sich um genau eine Angriffsart und hält intern kompilierte Regelsätze aus regulären Ausdrücken
 - **Einheitliche Schnittstelle** — das `Detector`-Trait ist der einzige Vertrag aller Detektoren: `fn detect(&self, input: &str) -> Option<DetectionResult>`
-- **Standardabdeckung** — `Scanner::default()` montiert mit einem Klick alle 27 Detektoren, einsatzbereit ohne Konfiguration
+- **Standardabdeckung** — `Scanner::default()` montiert mit einem Klick alle 32 Detektoren, einsatzbereit ohne Konfiguration
 - **Optionale Konfiguration** — `Scanner::builder()` unterstützt bedarfsgerechte Anpassung; mit `.with_detector()` lassen sich Detektoren selektiv montieren
 
 ### Abwägungen
@@ -27,7 +27,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 |------|------|------|
 | Regex vs. Parser | Regex | Geschwindigkeit hat im Erkennungsszenario Vorrang; Regex deckt verzerrte/Bypass-Muster besser ab |
 | Ersttreffer vs. vollständige Erkennung | Vollständige Erkennung | Eine Eingabe kann mehrere Angriffsarten gleichzeitig auslösen; nichts darf übersehen werden |
-| Null-Abhängigkeiten vs. Einführung von serde | Null-Abhängigkeiten | Nur `regex` + `thiserror`; schnelle Kompilierung, kleine Größe |
+| Null-Abhängigkeiten vs. Einführung von serde | Null-Abhängigkeiten | Nur `regex`; schnelle Kompilierung, kleine Größe |
 
 ---
 
@@ -45,7 +45,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
                        │  │   Vec<Box<dyn Detector>>   │  │
                        │  │   ├─ XssDetector           │  │
                        │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×27               │  │
+                       │  │   ├─ ... ×32               │  │
                        │  └────────────────────────────┘  │
                        └──────────────┬───────────────────┘
                                       │
@@ -60,7 +60,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
        │              │              │
   ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
   │injection│  │  protocol   │  │  data  │  │  file   │
-  │  10 个  │  │   9 个      │  │ 5 个   │  │  3 个   │
+  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
   └─────────┘  └─────────────┘  └────────┘  └─────────┘
 ```
 
@@ -69,9 +69,9 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | Modul | Pfad | Anzahl Detektoren | Zuständigkeit |
 |------|------|---------|------|
 | Kern | `src/lib.rs` `result.rs` `scanner.rs` | — | `Detector`-Trait, `DetectionResult`, `Scanner`/`ScannerBuilder` |
-| Injection | `src/injection/` | 10 | XSS, SQL-Injection, Command-Injection, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI |
-| Protokoll | `src/protocol/` | 9 | SSRF, XXE, Header-Injection, Host-Header-Angriffe, Request Smuggling, Open Redirect, CORS, WebSocket, DNS-Rebinding |
-| Daten | `src/data/` | 5 | PHP-Deserialisierung, CSV-Formel-Injection, E-Mail-Header-Injection, JWT-Angriffe, Prototype Pollution |
+| Injection | `src/injection/` | 11 | XSS, SQL-Injection, Command-Injection, NoSQL, LDAP, XPATH, JNDI, SSI, GraphQL, SSTI, Format-String |
+| Protokoll | `src/protocol/` | 11 | SSRF, XXE, Header-Injection, Host-Header-Angriffe, Request Smuggling, Open Redirect, CORS, WebSocket, DNS-Rebinding, Log4Shell, HTTP-Parameter-Pollution |
+| Daten | `src/data/` | 7 | PHP-Deserialisierung, CSV-Formel-Injection, E-Mail-Header-Injection, JWT-Angriffe, Prototype Pollution, Formel-Injection, ReDoS |
 | Datei | `src/file/` | 3 | Path Traversal, bösartige Datei-Uploads, Leck sensibler Daten |
 
 ### Struktur des Erkennungsergebnisses
@@ -82,7 +82,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 
 ## Implementierte Funktionen
 
-### Injection-Angriffe (10 Detektoren)
+### Injection-Angriffe (11 Detektoren)
 
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
@@ -96,8 +96,9 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **ssi_injection** | Befehlsausführung `<!--#exec cmd=`, Datei-Inklusion `<!--#include file=`, Variablen-Ausgabe `<!--#echo var=`, Datei-Informationen `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Introspection-Abfragen `__schema`/`__type`, tief verschachteltes DoS (≥5 Ebenen) | Medium |
 | **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python-MRO-Sandbox-Escape `__mro__`/`__subclasses__()` | Critical |
+| **format_string** | `%n`-Schreibspezifizierer (auch mit Längenmodifikatoren), überlange Breitenangaben `%123456d`, gehäufte `%x`/`%p`/`%s`-Spezifizierer (Format-String-Leak / Speicherkorruption) | Medium |
 
-### Protokoll- und Request-Angriffe (9 Detektoren)
+### Protokoll- und Request-Angriffe (11 Detektoren)
 
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
@@ -110,8 +111,10 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **cors** | `Origin: null`-Bypass, Kombination `Access-Control-Allow-Origin: *` + Credentials | Medium |
 | **websocket** | Handshake `Upgrade: websocket`, Cross-Origin-WebSocket `Origin: null`, unverschlüsselte `ws://`-Verbindungen | High |
 | **dns_rebinding** | Host-Header mit internen IPs `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
+| **log4shell** | Lookup-Obfuskation `${lower:j}`/`${upper:j}`, Obfuskation mit leerem String `${::-j}`, verschachtelte Lookups `${${...}:...}`, URL-kodierte Variante `%24%7b...%7d...ndi` | Critical |
+| **hpp** | Vermischung von Trennzeichen im Query-String `&a=1;b=2` und `;a=1&b=2` (Parameter-Pollution durch abweichende Parser-Semantik) | Medium |
 
-### Daten- und Serialisierungsangriffe (5 Detektoren)
+### Daten- und Serialisierungsangriffe (7 Detektoren)
 
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
@@ -120,6 +123,8 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **mail_header** | Blindkopie-Injection `Bcc:`/`Cc:`, mehrfache Absender `From:`, MIME-Header-Injection `MIME-Version:`/`Content-Type: multipart`, Manipulation der `boundary=`-Grenze | Medium |
 | **jwt_attack** | Bypass mit leerem Algorithmus `alg: none`, Path-Traversal-Injection über `kid`, leeres Signatur-Segment, leeres Payload-Segment | High |
 | **prototype_pollution** | Prototype-Chain-Pollution `__proto__`/`constructor.prototype`, Property-Kapern über `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
+| **formula_injection** | Formelzeichen am Feldanfang mit Befehls-Pipe `=cmd|`, gefährliche Tabellenfunktionen `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, Datenabfluss über `|` + Zellbezug `A0`, `DDE(`-Aufrufe, `@`-Funktionen | High |
+| **redos** | Katastrophales Backtracking: verschachtelte Quantifizierer `(a+)+`/`(a{2,})+`, überlappende Alternativen `(a|ab)+`, Quantifizierer über `\w`/`\d`/`.`-Gruppen | Medium |
 
 ### Dateien und sensible Daten (3 Detektoren)
 
@@ -128,6 +133,22 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **path_traversal** | Directory Traversal `../`/`..\\`, URL-kodierter Bypass `%2e%2e`, Protokoll-Wrapper `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, Null-Byte-Terminierung `%00` | Critical |
 | **upload** | PHP-Tags `<?php`/`<?=`, ASP-Tags `<%@`/`<%=`, Backdoor-Muster `eval($_`/`system($_`/`exec($_`/`passthru($_`, Superglobals `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, Kodierungs-Bypass mit `base64_decode()` | Critical |
 | **data_leak** | 16-stellige Kreditkarten-PAN (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM-Private-Key-Header `-----BEGIN`, OpenAI/LLM-API-Keys `sk-...`, Datenbank-Verbindungsstrings `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, JWT-Tokens | Critical |
+
+---
+
+## Zustandsbehaftete Module
+
+`session`, `throttle` und `score` sind **keine** `Detector`-Implementierungen. `session` und `throttle` sind zustandsbehaftet und identitätsbezogen — `Detector::detect(&self, input: &str)` kann eine zusammengesetzte Eingabe aus Token, Fingerabdruck, Position und Zeit nicht ausdrücken. Sie treten deshalb neben die Detektor-Kette, nicht in sie.
+
+| Modul | Typ | Aufgabe |
+|------|------|------|
+| `session` | `SessionGuard<S: SessionStore>` | Sitzungssicherheit: Client-Hijacking, Datenmanipulation, Anmeldung von ungewöhnlichem Ort, Token-Sitzungen. Methoden `bind`/`verify`/`revoke`/`revoke_all`/`rotate`; `Decision { Allow, Challenge, Block }` + `SessionThreat`; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300); Trait `SessionStore` + `MemoryStore` |
+| `throttle` | `Throttle<S: ThrottleStore>` | Ratenbegrenzung und Sperre: gleitendes Fenster, Schwellwert-Sperre, Kontosperrung. Methoden `check`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Risikobewertung: aggregiert einzelne Signale niedriger Schwere zu einer messbaren Größe. `RiskLevel { None, Low, Medium, High, Critical }` |
+
+**Asymmetrisches Fehlerverhalten ist Absicht.** `SessionGuard` gibt bei einem Speicherfehler `Decision::Block` (`StoreUnavailable`) zurück — fail-closed, es wird nie durchgelassen. `Throttle` ist die bewusste Ausnahme: Ratenbegrenzung ist Defense-in-Depth und kein primäres Authentifizierungs-Gate, deshalb liefert ein Backend-Ausfall `ThrottleDecision::Unavailable` statt `Banned` — alle Nutzer auszusperren wäre ein Selbst-DoS. Die Entscheidung liegt beim Aufrufer.
+
+**Weiterhin keine neuen Abhängigkeiten:** Die Liste bleibt bei `regex`. Der Preis: Token und Signatur liefert der Aufrufer, Positionen parst der Aufrufer. Beide Module abstrahieren ihren Speicher über ein Trait — für den Mehrinstanz-Betrieb genügt eine Implementierung von `SessionStore`/`ThrottleStore` auf Redis.
 
 ---
 
@@ -150,13 +171,13 @@ Die vollständige API-Referenz (Installation, selektive Scans, benutzerdefiniert
 ## Entwicklung
 
 ```bash
-# 构建
+# Build
 cargo build --release
 
-# 测试（46 个集成测试）
+# Tests (462 Tests: 354 Unit-, 46 Integrations-, 62 Modul-Tests)
 cargo test
 
-# 代码检查
+# Lint
 cargo clippy -- -D warnings
 ```
 
