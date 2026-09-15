@@ -103,10 +103,10 @@
 |--------|---------|--------|
 | **xss** | `<script>` و`onerror=` ومعالجات الأحداث المماثلة، البروتوكول الزائف `javascript:`، وسوم `<svg>`/`<iframe>`، `expression()` في CSS، `eval()`، `document.cookie` | Critical |
 | **sql_injection** | `UNION SELECT`، حقن التأخير عبر `sleep()`/`benchmark()`/`pg_sleep()`، تعداد `information_schema`، الإجراءات المخزنة `exec sp_`/`xp_`، نمط الحقن الأعمى المنطقي `' OR '1'='1`، `LOAD_FILE()`/`INTO OUTFILE` | Critical |
-| **command_injection** | أوامر علامة الاقتباس الخلفية، أوامر فرعية `$()`، تنفيذ متسلسل عبر الأنابيب `|`، قشرة عائدة عبر `/dev/tcp`، دوال PHP `passthru()`/`shell_exec()`/`system()`، استدعاءات `cmd.exe`/`powershell` | Critical |
+| **command_injection** | أوامر علامة الاقتباس الخلفية، أوامر فرعية `$()`، تنفيذ متسلسل عبر الأنابيب `\|`، قشرة عائدة عبر `/dev/tcp`، دوال PHP `passthru()`/`shell_exec()`/`system()`، استدعاءات `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | عوامل تشغيل MongoDB `$ne`/`$gt`/`$regex`/`$where`، حقن `$or`، تجاوز المصادقة عبر `{"$gt": ""}` | Critical |
-| **ldap_injection** | عوامل فلاتر `(&` `(|` `(!`، تعداد الخصائص `*(cn=`، حقن `objectClass`/`uid` | High |
-| **xpath_injection** | تجاوز منطقي `' or '1'='1`، حقن دالة `' or true()`، اجتياز العقد `'] | '` | High |
+| **ldap_injection** | عوامل فلاتر `(&` `(\|` `(!`، تعداد الخصائص `*(cn=`، حقن `objectClass`/`uid` | High |
+| **xpath_injection** | تجاوز منطقي `' or '1'='1`، حقن دالة `' or true()`، اجتياز العقد `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`، تشويش `${lower:j}`، تشويش `${upper:j}`، تشويش السلسلة الفارغة `${::-j}`، البحث في متغيرات البيئة `${env:}`، خصائص النظام `${sys:}` | Critical |
 | **ssi_injection** | تنفيذ أوامر `<!--#exec cmd=`، تضمين ملف `<!--#include file=`، إخراج متغير `<!--#echo var=`، معلومات الملفات `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | استعلامات الفحص الداخلي `__schema`/`__type`، DoS بالتدرج العميق (≥5 مستويات) | Medium |
@@ -134,7 +134,7 @@
 | الكاشف | الأنماط المغطاة | الخطورة |
 |--------|---------|--------|
 | **deserialization** | كائنات متسلسلة PHP `O:رقم:`/`C:رقم:`، مصفوفات `a:رقم:{`، استدعاءات `unserialize()`، طرق سحرية `__wakeup`/`__destruct`/`__toString` وما يشابهها | Critical |
-| **csv_injection** | أحرف صيغ بداية الخلية `=`/`+`/`-`/`@`، تبادل البيانات الديناميكي DDE، أنبوب أوامر `cmd|`، دالة `@SUM()` | Medium |
+| **csv_injection** | أحرف صيغ بداية الخلية `=`/`+`/`-`/`@`، تبادل البيانات الديناميكي DDE، أنبوب أوامر `cmd\|`، دالة `@SUM()` | Medium |
 | **mail_header** | حقن نسخة مخفية `Bcc:`/`Cc:`، مرسلون متعددون `From:`، حقن ترويسات MIME `MIME-Version:`/`Content-Type: multipart`، التلاعب بالحدود `boundary=` | Medium |
 | **jwt_attack** | تجاوز الخوارزمية الفارغة `alg: none`، حقن اجتياز المسار `kid`، مقطع توقيع فارغ، مقطع payload فارغ | High |
 | **prototype_pollution** | تلوث سلسلة النماذج الأولية `__proto__`/`constructor.prototype`، اختطاف الخصائص `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |

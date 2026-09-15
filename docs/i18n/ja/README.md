@@ -98,8 +98,8 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **sql_injection** | `UNION SELECT`、`sleep()`/`benchmark()`/`pg_sleep()` 遅延インジェクション、`information_schema` 列挙、`exec sp_`/`xp_` ストアドプロシージャ、ブール型ブラインドインジェクションパターン `' OR '1'='1`、`LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | バッククォートコマンド、`$()` サブコマンド、パイプによる連鎖実行、`/dev/tcp` リバースシェル、`passthru()`/`shell_exec()`/`system()` PHP 関数、`cmd.exe`/`powershell` 呼び出し | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` オペレーター、`$or` インジェクション、認証バイパス `{"$gt": ""}` | Critical |
-| **ldap_injection** | `(&` `(|` `(!` フィルターオペレーター、`*(cn=` 属性列挙、`objectClass`/`uid` インジェクション | High |
-| **xpath_injection** | `' or '1'='1` ブール型バイパス、`' or true()` 関数インジェクション、`'] | '` ノードトラバーサル | High |
+| **ldap_injection** | `(&` `(\|` `(!` フィルターオペレーター、`*(cn=` 属性列挙、`objectClass`/`uid` インジェクション | High |
+| **xpath_injection** | `' or '1'='1` ブール型バイパス、`' or true()` 関数インジェクション、`'] \| '` ノードトラバーサル | High |
 | **jndi_injection** | `${jndi:ldap://`、`${lower:j}` 難読化、`${upper:j}` 難読化、`${::-j}` 空文字列難読化、`${env:}` 環境変数ルックアップ、`${sys:}` システムプロパティ | Critical |
 | **ssi_injection** | `<!--#exec cmd=` コマンド実行、`<!--#include file=` ファイルインクルード、`<!--#echo var=` 変数出力、`<!--#fsize`/`<!--#flastmod` ファイル情報 | High |
 | **graphql_injection** | `__schema`/`__type` イントロスペクションクエリ、深いネストによる DoS（5 層以上） | Medium |
@@ -127,7 +127,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
 | **deserialization** | PHP `O:数字:`/`C:数字:` シリアライズオブジェクト、`a:数字:{` 配列、`unserialize()` 呼び出し、`__wakeup`/`__destruct`/`__toString` などのマジックメソッド | Critical |
-| **csv_injection** | 行頭 `=`/`+`/`-`/`@` 数式文字、DDE 動的データ交換、`cmd|` コマンドパイプ、`@SUM()` 関数 | Medium |
+| **csv_injection** | 行頭 `=`/`+`/`-`/`@` 数式文字、DDE 動的データ交換、`cmd\|` コマンドパイプ、`@SUM()` 関数 | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ブラインドカーボンコピーインジェクション、`From:` 多重送信者、`MIME-Version:`/`Content-Type: multipart` MIME ヘッダーインジェクション、`boundary=` バウンダリー操作 | Medium |
 | **jwt_attack** | `alg: none` 空アルゴリズムバイパス、`kid` パストラバーサルインジェクション、空署名セグメント、空 payload セグメント | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` プロトタイプチェーン汚染、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` プロパティハイジャック | High |

@@ -105,8 +105,8 @@ Rust में लिखी गई हमले का पता लगाने
 | **sql_injection** | `UNION SELECT`, `sleep()`/`benchmark()`/`pg_sleep()` विलंब इंजेक्शन, `information_schema` एन्यूमरेशन, `exec sp_`/`xp_` स्टोर्ड प्रोसीजर, बूलियन ब्लाइंड इंजेक्शन पैटर्न `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | बैकटिक कमांड, `$()` सबकमांड, पाइप चेन निष्पादन, `/dev/tcp` रिवर्स शेल, `passthru()`/`shell_exec()`/`system()` PHP फ़ंक्शन, `cmd.exe`/`powershell` कॉल | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` ऑपरेटर, `$or` इंजेक्शन, ऑथेंटिकेशन बाईपास `{"$gt": ""}` | Critical |
-| **ldap_injection** | `(&` `(|` `(!` फ़िल्टर ऑपरेटर, `*(cn=` एट्रिब्यूट एन्यूमरेशन, `objectClass`/`uid` इंजेक्शन | High |
-| **xpath_injection** | `' or '1'='1` बूलियन बाईपास, `' or true()` फ़ंक्शन इंजेक्शन, `'] | '` नोड ट्रैवर्सल | High |
+| **ldap_injection** | `(&` `(\|` `(!` फ़िल्टर ऑपरेटर, `*(cn=` एट्रिब्यूट एन्यूमरेशन, `objectClass`/`uid` इंजेक्शन | High |
+| **xpath_injection** | `' or '1'='1` बूलियन बाईपास, `' or true()` फ़ंक्शन इंजेक्शन, `'] \| '` नोड ट्रैवर्सल | High |
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` अस्पष्टता, `${upper:j}` अस्पष्टता, `${::-j}` खाली-स्ट्रिंग अस्पष्टता, `${env:}` एनवायरनमेंट वेरिएबल लुकअप, `${sys:}` सिस्टम प्रॉपर्टी | Critical |
 | **ssi_injection** | `<!--#exec cmd=` कमांड निष्पादन, `<!--#include file=` फ़ाइल इंक्लूज़न, `<!--#echo var=` वेरिएबल आउटपुट, `<!--#fsize`/`<!--#flastmod` फ़ाइल जानकारी | High |
 | **graphql_injection** | `__schema`/`__type` इंट्रोस्पेक्शन क्वेरी, डीप-नेस्टेड DoS (≥5 परतें) | Medium |
@@ -134,7 +134,7 @@ Rust में लिखी गई हमले का पता लगाने
 | डिटेक्टर | कवर किए गए पैटर्न | गंभीरता |
 |--------|---------|--------|
 | **deserialization** | PHP `O:अंक:`/`C:अंक:` सीरियलाइज़्ड ऑब्जेक्ट, `a:अंक:{` ऐरे, `unserialize()` कॉल, `__wakeup`/`__destruct`/`__toString` जैसी मैजिक मेथड | Critical |
-| **csv_injection** | पंक्ति की शुरुआत में `=`/`+`/`-`/`@` फ़ॉर्मूला कैरेक्टर, DDE डायनामिक डेटा एक्सचेंज, `cmd|` कमांड पाइप, `@SUM()` फ़ंक्शन | Medium |
+| **csv_injection** | पंक्ति की शुरुआत में `=`/`+`/`-`/`@` फ़ॉर्मूला कैरेक्टर, DDE डायनामिक डेटा एक्सचेंज, `cmd\|` कमांड पाइप, `@SUM()` फ़ंक्शन | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ब्लाइंड कार्बन कॉपी इंजेक्शन, `From:` एकाधिक प्रेषक, `MIME-Version:`/`Content-Type: multipart` MIME हेडर इंजेक्शन, `boundary=` बाउंड्री मैनिपुलेशन | Medium |
 | **jwt_attack** | `alg: none` खाली एल्गोरिदम बाईपास, `kid` पथ ट्रैवर्सल इंजेक्शन, खाली सिग्नेचर खंड, खाली payload खंड | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` प्रोटोटाइप चेन प्रदूषण, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` प्रॉपर्टी हाइजैकिंग | High |

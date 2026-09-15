@@ -105,8 +105,8 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | **sql_injection** | `UNION SELECT`, `sleep()`/`benchmark()`/`pg_sleep()` ডিলে ইনজেকশন, `information_schema` এনুমারেশন, `exec sp_`/`xp_` স্টোর্ড প্রসিডিউর, বুলিয়ান ব্লাইন্ড ইনজেকশন প্যাটার্ন `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | ব্যাকটিক কমান্ড, `$()` সাবকমান্ড, পাইপ অপারেটর চেইন এক্সিকিউশন, `/dev/tcp` রিভার্স শেল, `passthru()`/`shell_exec()`/`system()` PHP ফাংশন, `cmd.exe`/`powershell` কল | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` অপারেটর, `$or` ইনজেকশন, অথেনটিকেশন বাইপাস `{"$gt": ""}` | Critical |
-| **ldap_injection** | `(&` `(|` `(!` ফিল্টার অপারেটর, `*(cn=` অ্যাট্রিবিউট এনুমারেশন, `objectClass`/`uid` ইনজেকশন | High |
-| **xpath_injection** | `' or '1'='1` বুলিয়ান বাইপাস, `' or true()` ফাংশন ইনজেকশন, `'] | '` নোড ট্রাভার্সাল | High |
+| **ldap_injection** | `(&` `(\|` `(!` ফিল্টার অপারেটর, `*(cn=` অ্যাট্রিবিউট এনুমারেশন, `objectClass`/`uid` ইনজেকশন | High |
+| **xpath_injection** | `' or '1'='1` বুলিয়ান বাইপাস, `' or true()` ফাংশন ইনজেকশন, `'] \| '` নোড ট্রাভার্সাল | High |
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` অবফাসকেশন, `${upper:j}` অবফাসকেশন, `${::-j}` খালি স্ট্রিং অবফাসকেশন, `${env:}` এনভায়রনমেন্ট ভেরিয়েবল লুকআপ, `${sys:}` সিস্টেম প্রপার্টি | Critical |
 | **ssi_injection** | `<!--#exec cmd=` কমান্ড এক্সিকিউশন, `<!--#include file=` ফাইল ইনক্লুশন, `<!--#echo var=` ভেরিয়েবল আউটপুট, `<!--#fsize`/`<!--#flastmod` ফাইল তথ্য | High |
 | **graphql_injection** | `__schema`/`__type` ইন্ট্রোস্পেকশন কুয়েরি, ডিপ নেস্টেড DoS (≥৫ লেভেল) | Medium |
@@ -134,7 +134,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | ডিটেক্টর | কভার করা প্যাটার্ন | গুরুতরতা |
 |--------|---------|--------|
 | **deserialization** | PHP `O:সংখ্যা:`/`C:সংখ্যা:` সিরিয়ালাইজড অবজেক্ট, `a:সংখ্যা:{` অ্যারে, `unserialize()` কল, `__wakeup`/`__destruct`/`__toString` ইত্যাদি ম্যাজিক মেথড | Critical |
-| **csv_injection** | সারির শুরুতে `=`/`+`/`-`/`@` ফর্মুলা অক্ষর, DDE ডাইনামিক ডেটা এক্সচেঞ্জ, `cmd|` কমান্ড পাইপ, `@SUM()` ফাংশন | Medium |
+| **csv_injection** | সারির শুরুতে `=`/`+`/`-`/`@` ফর্মুলা অক্ষর, DDE ডাইনামিক ডেটা এক্সচেঞ্জ, `cmd\|` কমান্ড পাইপ, `@SUM()` ফাংশন | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ব্লাইন্ড কার্বন কপি ইনজেকশন, `From:` একাধিক প্রেরক, `MIME-Version:`/`Content-Type: multipart` MIME হেডার ইনজেকশন, `boundary=` বাউন্ডারি ম্যানিপুলেশন | Medium |
 | **jwt_attack** | `alg: none` খালি অ্যালগরিদম বাইপাস, `kid` পাথ ট্রাভার্সাল ইনজেকশন, খালি সিগনেচার সেগমেন্ট, খালি payload সেগমেন্ট | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` প্রোটোটাইপ চেইন পলিউশন, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` প্রপার্টি হাইজ্যাকিং | High |

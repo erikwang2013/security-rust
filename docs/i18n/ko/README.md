@@ -98,8 +98,8 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | **sql_injection** | `UNION SELECT`, `sleep()`/`benchmark()`/`pg_sleep()` 지연 인젝션, `information_schema` 열거, `exec sp_`/`xp_` 저장 프로시저, 불리언 블라인드 패턴 `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | 백틱 명령, `$()` 서브셸, 파이프 기호 연쇄 실행, `/dev/tcp` 리버스 셸, `passthru()`/`shell_exec()`/`system()` PHP 함수, `cmd.exe`/`powershell` 호출 | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` 연산자, `$or` 인젝션, 인증 우회 `{"$gt": ""}` | Critical |
-| **ldap_injection** | `(&` `(|` `(!` 필터 연산자, `*(cn=` 속성 열거, `objectClass`/`uid` 인젝션 | High |
-| **xpath_injection** | `' or '1'='1` 불리언 우회, `' or true()` 함수 인젝션, `'] | '` 노드 순회 | High |
+| **ldap_injection** | `(&` `(\|` `(!` 필터 연산자, `*(cn=` 속성 열거, `objectClass`/`uid` 인젝션 | High |
+| **xpath_injection** | `' or '1'='1` 불리언 우회, `' or true()` 함수 인젝션, `'] \| '` 노드 순회 | High |
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` 난독화, `${upper:j}` 난독화, `${::-j}` 빈 문자열 난독화, `${env:}` 환경 변수 조회, `${sys:}` 시스템 속성 | Critical |
 | **ssi_injection** | `<!--#exec cmd=` 명령 실행, `<!--#include file=` 파일 포함, `<!--#echo var=` 변수 출력, `<!--#fsize`/`<!--#flastmod` 파일 정보 | High |
 | **graphql_injection** | `__schema`/`__type` 인트로스펙션 쿼리, 심층 중첩 DoS(5단계 이상) | Medium |
@@ -127,7 +127,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
 | **deserialization** | PHP `O:숫자:`/`C:숫자:` 직렬화 객체, `a:숫자:{` 배열, `unserialize()` 호출, `__wakeup`/`__destruct`/`__toString` 등 매직 메서드 | Critical |
-| **csv_injection** | 행 시작 `=`/`+`/`-`/`@` 수식 문자, DDE 동적 데이터 교환, `cmd|` 명령 파이프, `@SUM()` 함수 | Medium |
+| **csv_injection** | 행 시작 `=`/`+`/`-`/`@` 수식 문자, DDE 동적 데이터 교환, `cmd\|` 명령 파이프, `@SUM()` 함수 | Medium |
 | **mail_header** | `Bcc:`/`Cc:` 숨은 참조 인젝션, `From:` 다중 발신자, `MIME-Version:`/`Content-Type: multipart` MIME 헤더 인젝션, `boundary=` 경계 조작 | Medium |
 | **jwt_attack** | `alg: none` 빈 알고리즘 우회, `kid` 경로 탐색 인젝션, 빈 서명 세그먼트, 빈 payload 세그먼트 | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` 프로토타입 체인 폴루션, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` 속성 하이재킹 | High |

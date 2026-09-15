@@ -105,8 +105,8 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | **sql_injection** | `UNION SELECT`, injeksi penundaan `sleep()`/`benchmark()`/`pg_sleep()`, enumerasi `information_schema`, prosedur tersimpan `exec sp_`/`xp_`, pola boolean blind `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Perintah backtick, subperintah `$()`, eksekusi berantai melalui pipe, reverse shell `/dev/tcp`, fungsi PHP `passthru()`/`shell_exec()`/`system()`, pemanggilan `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Operator MongoDB `$ne`/`$gt`/`$regex`/`$where`, injeksi `$or`, bypass autentikasi `{"$gt": ""}` | Critical |
-| **ldap_injection** | Operator filter `(&` `(|` `(!`, enumerasi atribut `*(cn=`, injeksi `objectClass`/`uid` | High |
-| **xpath_injection** | Bypass boolean `' or '1'='1`, injeksi fungsi `' or true()`, traversal simpul `'] | '` | High |
+| **ldap_injection** | Operator filter `(&` `(\|` `(!`, enumerasi atribut `*(cn=`, injeksi `objectClass`/`uid` | High |
+| **xpath_injection** | Bypass boolean `' or '1'='1`, injeksi fungsi `' or true()`, traversal simpul `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, obfuscation `${lower:j}`, obfuscation `${upper:j}`, obfuscasi string kosong `${::-j}`, lookup variabel lingkungan `${env:}`, properti sistem `${sys:}` | Critical |
 | **ssi_injection** | Eksekusi perintah `<!--#exec cmd=`, inklusi file `<!--#include file=`, output variabel `<!--#echo var=`, info file `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Query introspeksi `__schema`/`__type`, DoS bersarang dalam (≥5 lapis) | Medium |
@@ -134,7 +134,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
 | **deserialization** | Objek serialisasi PHP `O:angka:`/`C:angka:`, array `a:angka:{`, pemanggilan `unserialize()`, metode magic seperti `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Karakter formula di awal baris `=`/`+`/`-`/`@`, DDE dynamic data exchange, pipe perintah `cmd|`, fungsi `@SUM()` | Medium |
+| **csv_injection** | Karakter formula di awal baris `=`/`+`/`-`/`@`, DDE dynamic data exchange, pipe perintah `cmd\|`, fungsi `@SUM()` | Medium |
 | **mail_header** | Injeksi salinan tersembunyi `Bcc:`/`Cc:`, beberapa pengirim `From:`, injeksi header MIME `MIME-Version:`/`Content-Type: multipart`, manipulasi `boundary=` | Medium |
 | **jwt_attack** | Bypass algoritma kosong `alg: none`, injeksi path traversal `kid`, segmen tanda tangan kosong, segmen payload kosong | High |
 | **prototype_pollution** | Polusi rantai prototipe `__proto__`/`constructor.prototype`, pembajakan properti `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
