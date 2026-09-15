@@ -35,9 +35,13 @@ impl<S: SessionStore> SessionGuard<S> {
             return Err(SessionError::EmptyFingerprint);
         }
 
+        // 坐标在信任边界校验一次：NaN / 越界一律降级为「没有坐标」，
+        // 后面写入记录与登录历史的一律是这个清洗过的值
+        let coords = geo::sanitize_coords(ctx.coords);
+
         let point = LoginPoint {
             location: ctx.location.map(str::to_string),
-            coords: ctx.coords,
+            coords,
             at: now,
         };
 
@@ -61,7 +65,7 @@ impl<S: SessionStore> SessionGuard<S> {
             subject: ctx.subject.to_string(),
             fingerprint: ctx.fingerprint.to_string(),
             location: ctx.location.map(str::to_string),
-            coords: ctx.coords,
+            coords,
             signature: ctx.signature.map(str::to_string),
             issued_at: now,
             last_seen: now,
@@ -120,6 +124,8 @@ impl<S: SessionStore> SessionGuard<S> {
                 threats.push(SessionThreat::SignatureInvalid);
             }
             (Some(_), None) => threats.push(SessionThreat::SignatureMissing),
+            // 登录时没设基线，本次却带了签名：请求方与会话建立方行为不一致
+            (None, Some(_)) => threats.push(SessionThreat::SignatureUnexpected),
             _ => {}
         }
 
@@ -136,19 +142,26 @@ impl<S: SessionStore> SessionGuard<S> {
         }
 
         // 异地（铁证）：与该身份的登录历史比对
-        if let Ok(history) = self.store.recent_logins(&record.subject) {
-            let current = LoginPoint {
-                location: ctx.location.map(str::to_string),
-                coords: ctx.coords,
-                at: now,
-            };
-            if let Some(prev) = history.last() {
-                if let Some(kmh) =
-                    geo::impossible_travel(prev, &current, self.config.impossible_travel_kmh)
-                {
-                    threats.push(SessionThreat::ImpossibleTravel { kmh });
+        match self.store.recent_logins(&record.subject) {
+            Ok(history) => {
+                let current = LoginPoint {
+                    location: ctx.location.map(str::to_string),
+                    coords: geo::sanitize_coords(ctx.coords),
+                    at: now,
+                };
+                if let Some(prev) = history.last() {
+                    if let Some(kmh) =
+                        geo::impossible_travel(prev, &current, self.config.impossible_travel_kmh)
+                    {
+                        threats.push(SessionThreat::ImpossibleTravel { kmh });
+                    }
                 }
             }
+            // fail-closed：历史读不到时静默跳过，等于「后端一坏，异地检测就关」，
+            // 攻击者可以用后端故障（或诱导故障）换掉一整类判定。上报为
+            // StoreUnavailable（⇒ Block），与 bind() 对同一调用用 `?`、
+            // verify() 把 get 的 Err 转 StoreUnavailable 的处置保持一致。
+            Err(_) => threats.push(SessionThreat::StoreUnavailable),
         }
 
         if threats.is_empty() {
@@ -337,6 +350,26 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].location.as_deref(), Some("CN-BJ"));
         assert_eq!(h[0].at, NOW);
+    }
+
+    #[test]
+    fn bind_drops_non_finite_coords_at_trust_boundary() {
+        // NaN 一旦入库/入历史就会长期污染该 subject 的异地判定，必须在入口清洗
+        let g = guard();
+        let mut bad = ctx("t1", "u1", FP);
+        bad.coords = Some((f64::NAN, 116.4074));
+        g.bind(&bad, NOW).unwrap();
+        assert_eq!(g.store.get("t1").unwrap().unwrap().coords, None);
+        assert_eq!(g.store.recent_logins("u1").unwrap()[0].coords, None);
+
+        // 合法坐标照常保留
+        let mut good = ctx("t2", "u2", FP);
+        good.coords = Some((31.2304, 121.4737));
+        g.bind(&good, NOW).unwrap();
+        assert_eq!(
+            g.store.get("t2").unwrap().unwrap().coords,
+            Some((31.2304, 121.4737))
+        );
     }
 
     #[test]

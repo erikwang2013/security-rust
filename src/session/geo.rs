@@ -15,9 +15,27 @@ pub(crate) fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
     let dlat = lat2 - lat1;
     let dlon = lon2 - lon1;
     let h = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
-    // h 理论上属 [0,1]，浮点误差可能略微越界，clamp 防止 sqrt 出 NaN
+    // h 理论上属 [0,1]，浮点误差可能使它略微越界，clamp 防止 sqrt 因轻微的负值出 NaN。
+    // 注意这里挡不住 NaN 输入（NaN 与任何值比较恒为 false，clamp 原样返回 NaN）——
+    // NaN 由 `sanitize_coords` 在信任边界拦掉，不会走到这里。
     let h = h.clamp(0.0, 1.0);
     2.0 * EARTH_RADIUS_KM * h.sqrt().atan2((1.0 - h).sqrt())
+}
+
+/// 坐标合法性校验（信任边界）。非有限值或越界的经纬度一律视为「没有坐标」，
+/// 而不是让 NaN 传播下去 —— NaN 参与的比较恒为 false，会静默关掉不可能旅行检测。
+pub(crate) fn sanitize_coords(c: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    match c {
+        Some((lat, lon))
+            if lat.is_finite()
+                && lon.is_finite()
+                && (-90.0..=90.0).contains(&lat)
+                && (-180.0..=180.0).contains(&lon) =>
+        {
+            Some((lat, lon))
+        }
+        _ => None,
+    }
 }
 
 /// 区域标识是否变化。大小写不敏感并去除首尾空白，
@@ -94,18 +112,40 @@ mod tests {
     }
 
     #[test]
-    fn haversine_never_nan() {
-        // clamp 保证极端输入不出 NaN
+    fn haversine_finite_for_extreme_valid_coords() {
+        // 有限且在范围内的极端输入恒返回有限非负值。
+        // （clamp 只兜浮点误差，不保证 NaN 输入 —— NaN 由 sanitize_coords 在边界拦掉）
         for (a, b) in [
             ((0.0, 0.0), (0.0, 0.0)),
             ((90.0, 0.0), (-90.0, 0.0)),
             ((90.0, 0.0), (90.0, 180.0)),
+            ((-90.0, -180.0), (90.0, 180.0)),
             ((-89.9, -180.0), (89.9, 180.0)),
         ] {
             let km = haversine_km(a, b);
             assert!(km.is_finite(), "non-finite for {a:?} -> {b:?}");
             assert!(km >= 0.0, "negative for {a:?} -> {b:?}");
         }
+    }
+
+    #[test]
+    fn sanitize_coords_rejects_non_finite_and_out_of_range() {
+        assert_eq!(sanitize_coords(None), None);
+        // NaN / 无穷：clamp 挡不住，必须在这里拦掉
+        assert_eq!(sanitize_coords(Some((f64::NAN, 0.0))), None);
+        assert_eq!(sanitize_coords(Some((0.0, f64::NAN))), None);
+        assert_eq!(sanitize_coords(Some((f64::INFINITY, 0.0))), None);
+        assert_eq!(sanitize_coords(Some((f64::NEG_INFINITY, 0.0))), None);
+        assert_eq!(sanitize_coords(Some((0.0, f64::INFINITY))), None);
+        // 越界
+        assert_eq!(sanitize_coords(Some((91.0, 0.0))), None);
+        assert_eq!(sanitize_coords(Some((-91.0, 0.0))), None);
+        assert_eq!(sanitize_coords(Some((0.0, -181.0))), None);
+        assert_eq!(sanitize_coords(Some((0.0, 181.0))), None);
+        // 闭区间边界合法
+        assert_eq!(sanitize_coords(Some((90.0, 180.0))), Some((90.0, 180.0)));
+        assert_eq!(sanitize_coords(Some((-90.0, -180.0))), Some((-90.0, -180.0)));
+        assert_eq!(sanitize_coords(Some(BEIJING)), Some(BEIJING));
     }
 
     #[test]

@@ -60,6 +60,54 @@ impl SessionStore for BrokenStore {
     }
 }
 
+/// `get` 正常（委托内层 MemoryStore），但 `recent_logins` 报错 ——
+/// 专门覆盖「会话可读、登录历史不可读」这条 fail-closed 路径。
+/// （`BrokenStore` 全部方法报错，`verify` 会在 `get` 处就返回，走不到这里。）
+struct HalfBrokenStore(MemoryStore);
+
+impl SessionStore for HalfBrokenStore {
+    fn put(&self, r: SessionRecord) -> Result<(), StoreError> {
+        self.0.put(r)
+    }
+    fn get(&self, t: &str) -> Result<Option<SessionRecord>, StoreError> {
+        self.0.get(t)
+    }
+    fn touch(&self, t: &str, n: u64) -> Result<(), StoreError> {
+        self.0.touch(t, n)
+    }
+    fn revoke(&self, t: &str) -> Result<(), StoreError> {
+        self.0.revoke(t)
+    }
+    fn revoke_subject(&self, s: &str) -> Result<usize, StoreError> {
+        self.0.revoke_subject(s)
+    }
+    fn recent_logins(&self, _s: &str) -> Result<Vec<LoginPoint>, StoreError> {
+        Err(StoreError::Corrupt)
+    }
+    fn record_login(&self, _s: &str, _p: LoginPoint) -> Result<(), StoreError> {
+        Err(StoreError::Corrupt)
+    }
+    fn purge_expired(&self, n: u64) -> Result<usize, StoreError> {
+        self.0.purge_expired(n)
+    }
+}
+
+/// 与 `ctx("t1", "u1", FP)` 相符的一条会话记录，供替身存储直接 `put` 用。
+fn record(token: &str, subject: &str) -> SessionRecord {
+    SessionRecord {
+        token: token.into(),
+        subject: subject.into(),
+        fingerprint: FP.into(),
+        location: Some("CN-BJ".into()),
+        coords: Some((39.9042, 116.4074)),
+        signature: None,
+        issued_at: NOW,
+        last_seen: NOW,
+        expires_at: NOW + 3_600,
+        revoked: false,
+    }
+}
+
 // ── 门槛检查 ────────────────────────────────────────────────
 
 #[test]
@@ -182,6 +230,21 @@ fn verify_signature_missing_when_baseline_had_one() {
     let v = g.verify(&ctx("t1", "u1", FP), NOW + 10); // 无签名
     assert_eq!(v.decision, Decision::Block);
     assert_eq!(v.threats, vec![SessionThreat::SignatureMissing]);
+}
+
+#[test]
+fn verify_signature_unexpected_challenges() {
+    // 服务端没设签名基线，本次却带了签名：调用方与自己行为不一致，
+    // 属于「信号」而非「结论」—— 先二次验证，不直接拒绝
+    let g = guard();
+    g.bind(&ctx("t1", "u1", FP), NOW).unwrap(); // 无 signature
+
+    let mut c = ctx("t1", "u1", FP);
+    c.signature = Some("mac");
+    let v = g.verify(&c, NOW + 10);
+    assert_eq!(v.threats, vec![SessionThreat::SignatureUnexpected]);
+    assert_eq!(v.decision, Decision::Challenge);
+    assert_eq!(v.severity, Severity::Medium);
 }
 
 #[test]
@@ -321,6 +384,23 @@ fn verify_fails_closed_when_store_unavailable() {
         v.decision,
         Decision::Block,
         "后端故障绝不能放行 —— 这是可被攻击者主动触发的绕过"
+    );
+    assert_eq!(v.threats, vec![SessionThreat::StoreUnavailable]);
+}
+
+#[test]
+fn verify_fails_closed_when_login_history_unavailable() {
+    // 会话本身可读、只有登录历史读不到：静默跳过异地判定就是 fail-open，
+    // 攻击者可用后端故障换掉一整类检测。必须 Block。
+    let store = HalfBrokenStore(MemoryStore::new());
+    store.put(record("t1", "u1")).unwrap();
+    let g = SessionGuard::new(store, SessionConfig::default());
+
+    let v = g.verify(&ctx("t1", "u1", FP), NOW + 10);
+    assert_eq!(
+        v.decision,
+        Decision::Block,
+        "登录历史读不到时绝不能放行"
     );
     assert_eq!(v.threats, vec![SessionThreat::StoreUnavailable]);
 }

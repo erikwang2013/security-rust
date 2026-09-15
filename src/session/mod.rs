@@ -37,6 +37,8 @@ pub enum SessionThreat {
     FingerprintMismatch,
     SignatureInvalid,
     SignatureMissing,
+    /// 登录时未设签名基线，但本请求提供了签名。
+    SignatureUnexpected,
     LocationChanged,
     ImpossibleTravel { kmh: f64 },
     TimestampSkew,
@@ -54,7 +56,9 @@ impl SessionThreat {
             SessionThreat::TokenRevoked
             | SessionThreat::SignatureMissing
             | SessionThreat::StoreUnavailable => Severity::High,
-            SessionThreat::LocationChanged | SessionThreat::TimestampSkew => Severity::Medium,
+            SessionThreat::LocationChanged
+            | SessionThreat::TimestampSkew
+            | SessionThreat::SignatureUnexpected => Severity::Medium,
             SessionThreat::TokenExpired => Severity::Low,
         }
     }
@@ -62,7 +66,9 @@ impl SessionThreat {
     /// 该威胁对应的处置建议。
     pub fn decision(&self) -> Decision {
         match self {
-            SessionThreat::LocationChanged | SessionThreat::TimestampSkew => Decision::Challenge,
+            SessionThreat::LocationChanged
+            | SessionThreat::TimestampSkew
+            | SessionThreat::SignatureUnexpected => Decision::Challenge,
             _ => Decision::Block,
         }
     }
@@ -313,15 +319,26 @@ mod tests {
         assert_eq!(SessionThreat::TokenExpired.severity(), Severity::Low);
         assert_eq!(SessionThreat::LocationChanged.severity(), Severity::Medium);
         assert_eq!(SessionThreat::TimestampSkew.severity(), Severity::Medium);
+        assert_eq!(
+            SessionThreat::SignatureUnexpected.severity(),
+            Severity::Medium
+        );
     }
 
     #[test]
-    fn only_location_and_skew_challenge() {
+    fn only_advisory_threats_challenge() {
+        // 这三项是「信号」而非「结论」：可能只是出差 / 时钟漂移 / 调用方
+        // 与自己行为不一致，先二次验证而不是直接拒绝
         assert_eq!(
             SessionThreat::LocationChanged.decision(),
             Decision::Challenge
         );
         assert_eq!(SessionThreat::TimestampSkew.decision(), Decision::Challenge);
+        assert_eq!(
+            SessionThreat::SignatureUnexpected.decision(),
+            Decision::Challenge
+        );
+        // 其余一律 Block
         assert_eq!(SessionThreat::TokenExpired.decision(), Decision::Block);
         assert_eq!(SessionThreat::StoreUnavailable.decision(), Decision::Block);
     }
