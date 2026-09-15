@@ -8,14 +8,18 @@ pub mod injection;
 pub mod protocol;
 pub mod result;
 pub mod scanner;
+pub mod score;
 pub mod session;
+pub mod throttle;
 
 pub use result::{AttackCategory, DetectionResult, Severity};
 pub use scanner::{Scanner, ScannerBuilder};
+pub use score::{RiskAssessment, RiskLevel, assess};
 pub use session::{
     Decision, LoginPoint, MemoryStore, RequestContext, SessionConfig, SessionError, SessionGuard,
     SessionRecord, SessionStore, SessionThreat, SessionVerdict, StoreError,
 };
+pub use throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleStore};
 
 pub trait Detector: Send + Sync {
     fn name(&self) -> &'static str;
