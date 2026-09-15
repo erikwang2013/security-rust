@@ -1,19 +1,21 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 use crate::data::{
-    CsvInjectionDetector, DeserializationDetector, JwtAttackDetector, MailHeaderDetector,
-    PrototypePollutionDetector,
+    CsvInjectionDetector, DeserializationDetector, FormulaInjectionDetector, JwtAttackDetector,
+    MailHeaderDetector, PrototypePollutionDetector, ReDoSDetector,
 };
 use crate::file::{DataLeakDetector, PathTraversalDetector, UploadDetector};
 use crate::injection::{
-    CommandInjectionDetector, GraphQlInjectionDetector, JndiInjectionDetector,
-    LdapInjectionDetector, NoSqlInjectionDetector, SqlInjectionDetector, SsiInjectionDetector,
-    SstiDetector, XPathInjectionDetector, XssDetector,
+    CommandInjectionDetector, FormatStringDetector, GraphQlInjectionDetector,
+    JndiInjectionDetector, LdapInjectionDetector, NoSqlInjectionDetector, SqlInjectionDetector,
+    SsiInjectionDetector, SstiDetector, XPathInjectionDetector, XssDetector,
 };
 use crate::protocol::{
-    CorsDetector, DnsRebindingDetector, HeaderInjectionDetector, HostHeaderDetector,
-    OpenRedirectDetector, RequestSmugglingDetector, SsrfDetector, WebSocketDetector, XxeDetector,
+    CorsDetector, CrlfInjectionDetector, DnsRebindingDetector, HeaderInjectionDetector,
+    HostHeaderDetector, HttpParameterPollutionDetector, Log4ShellDetector, OpenRedirectDetector,
+    RequestSmugglingDetector, SsrfDetector, WebSocketDetector, XxeDetector,
 };
+use crate::score::{self, RiskAssessment};
 use crate::{Detector, result::DetectionResult};
 
 pub struct Scanner {
@@ -35,6 +37,7 @@ impl Default for Scanner {
                 Box::new(SsiInjectionDetector),
                 Box::new(GraphQlInjectionDetector),
                 Box::new(SstiDetector),
+                Box::new(FormatStringDetector),
                 // Protocol
                 Box::new(SsrfDetector),
                 Box::new(XxeDetector),
@@ -45,12 +48,17 @@ impl Default for Scanner {
                 Box::new(CorsDetector),
                 Box::new(WebSocketDetector),
                 Box::new(DnsRebindingDetector),
+                Box::new(Log4ShellDetector),
+                Box::new(HttpParameterPollutionDetector),
+                Box::new(CrlfInjectionDetector),
                 // Data
                 Box::new(DeserializationDetector),
                 Box::new(CsvInjectionDetector),
                 Box::new(MailHeaderDetector),
                 Box::new(JwtAttackDetector),
                 Box::new(PrototypePollutionDetector),
+                Box::new(FormulaInjectionDetector),
+                Box::new(ReDoSDetector),
                 // File
                 Box::new(PathTraversalDetector),
                 Box::new(UploadDetector),
@@ -77,6 +85,11 @@ impl Scanner {
             }
         }
         results
+    }
+
+    /// 把「有/无命中」升级为「累积风险」：多条低危叠加可升到更高等级。
+    pub fn assess(&self, input: &str) -> RiskAssessment {
+        score::assess(&self.scan(input))
     }
 
     pub fn scan_with(&self, input: &str, names: &[&str]) -> Vec<DetectionResult> {
@@ -122,8 +135,77 @@ mod tests {
     }
 
     #[test]
-    fn default_scanner_registers_all_27_detectors() {
-        assert_eq!(Scanner::default().detectors.len(), 27);
+    fn default_scanner_registers_all_33_detectors() {
+        assert_eq!(Scanner::default().detectors.len(), 33);
+    }
+
+    #[test]
+    fn default_scanner_registers_each_detector_once() {
+        let scanner = Scanner::default();
+        let mut names: Vec<&str> = scanner.detectors.iter().map(|d| d.name()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), before, "检测器名字重复: {names:?}");
+    }
+
+    #[test]
+    fn new_detectors_are_registered() {
+        let scanner = Scanner::default();
+        let names: Vec<&str> = scanner.detectors.iter().map(|d| d.name()).collect();
+        for expected in [
+            "log4shell",
+            "hpp",
+            "formula_injection",
+            "redos",
+            "format_string",
+            "crlf_injection",
+        ] {
+            assert!(names.contains(&expected), "缺少检测器: {expected}");
+        }
+    }
+
+    #[test]
+    fn new_detectors_do_not_fire_on_clean_input() {
+        let scanner = Scanner::default();
+        for input in [
+            "the price is ${amount}",
+            "a=1&b=2",
+            "= 5",
+            "-3 度",
+            "a@b.com",
+            "100% safe",
+            "50% off",
+            "line one\r\nline two",
+            "5*(3+2)",
+        ] {
+            let results = scanner.scan_with(input, &["log4shell", "hpp", "formula_injection", "redos", "format_string", "crlf_injection"]);
+            assert!(results.is_empty(), "新检测器误报 {input:?}: {:?}", types(&results));
+        }
+    }
+
+    #[test]
+    fn assess_returns_none_for_clean_input() {
+        let a = Scanner::default().assess("hello world 123");
+        assert_eq!(a.level, crate::score::RiskLevel::None);
+        assert_eq!(a.score, 0);
+        assert_eq!(a.results, 0);
+    }
+
+    #[test]
+    fn assess_returns_critical_for_critical_hit() {
+        let a = Scanner::default().assess(XSS);
+        assert_eq!(a.level, crate::score::RiskLevel::Critical);
+        assert_eq!(a.results, 1);
+        assert!(a.score > 0);
+    }
+
+    #[test]
+    fn assess_escalates_on_stacked_medium_hits() {
+        let input = "=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd";
+        let a = Scanner::default().assess(input);
+        assert!(a.results >= 3, "期望多条命中，实际 {:?}", a);
+        assert!(a.level >= crate::score::RiskLevel::High, "叠加后应升级: {:?}", a);
     }
 
     #[test]

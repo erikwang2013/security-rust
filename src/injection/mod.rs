@@ -1,6 +1,7 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 pub mod command_injection;
+pub mod format_string;
 pub mod graphql_injection;
 pub mod jndi_injection;
 pub mod ldap_injection;
@@ -12,6 +13,7 @@ pub mod xpath_injection;
 pub mod xss;
 
 pub use command_injection::CommandInjectionDetector;
+pub use format_string::FormatStringDetector;
 pub use graphql_injection::GraphQlInjectionDetector;
 pub use jndi_injection::JndiInjectionDetector;
 pub use ldap_injection::LdapInjectionDetector;
