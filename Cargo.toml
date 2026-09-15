@@ -2,7 +2,7 @@
 
 [package]
 name = "security-rust"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.87"
 description = "A pure Rust attack detection library with 32 detectors across 4 categories — injection, protocol, data, and file — plus stateful session, throttling, and risk scoring. Zero framework dependencies."

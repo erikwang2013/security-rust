@@ -85,7 +85,7 @@ pub enum Decision { Allow, Challenge, Block }
 
 pub struct SessionVerdict {
     pub decision: Decision,
-    pub severity: Severity,          // 复用既有 Severity，不新造
+    pub severity: Option<Severity>,  // v2.0.0 起为 Option：无威胁时 None，不设占位值
     pub threats: Vec<SessionThreat>,
 }
 ```
@@ -215,7 +215,7 @@ impl<S: SessionStore> SessionGuard<S> {
 
 - `TokenExpired` 走 Block 但严重度低 —— 它表示必须重新登录，是例行情况而非攻击。
 - `LocationChanged` 只 Challenge（可能只是出差），`ImpossibleTravel` 才 Block（物理上不可能）。
-- 多个威胁并存时取**最严格**的 decision（`Allow < Challenge < Block`，由 `Decision` 的 `Ord` 派生保证），severity 取**最高**者。
+- 多个威胁并存时取**最严格**的 decision（`Allow < Challenge < Block`，由 `Decision` 的 `Ord` 派生保证），severity 取**最高**者；无威胁时 `severity` 为 `None`（v2.0.0 起，此前是 `Severity::Low` 占位 —— 占位值在日志里与「发现了一条低危」难以区分，已改为由类型表达「没有威胁」）。
 - **`Severity` 不派生 `Ord`**，也不应派生 —— 它的声明顺序是 `Critical` 在最前，派生 `Ord` 会得到与严重程度**相反**的序，`max()` 将静默取到最不严重者。严重度比较一律走 `session/mod.rs` 的显式 `severity_rank()`（`Low=0 / Medium=1 / High=2 / Critical=3`）。`Decision` 的情况相反，它按严格度递增声明（`Allow < Challenge < Block`），因此可以安全地用 `Ord` 比较。
 - 结果是 `src/result.rs` 与全部既有检测器**零改动**，本模块对既有代码是纯增量（只新增文件）。
 

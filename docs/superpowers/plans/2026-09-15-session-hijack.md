@@ -27,6 +27,7 @@
 | 5 | **新增 `guard.rs` 的 fail-closed 路径** | 审查发现 `if let Ok(history) = self.store.recent_logins(..)` 在存储报错时静默跳过异地判定 —— 与同文件 `bind()` 用 `?`、与 `verify()` 自陈的 fail-closed 原则矛盾，且零测试覆盖。改为上报 `StoreUnavailable` |
 | 6 | **`geo.rs` 新增 `sanitize_coords`** | `f64::clamp` 挡不住 NaN（NaN 与任何值比较恒为 false，原样返回），NaN 坐标可在 `bind` 时污染登录历史、静默关掉该 subject 的异地检测。改为在信任边界校验 |
 | 7 | **恢复 re-export 的时点不同** | 计划 Task 1 Step 4 先加重导出再于 Step 6 注释掉；实际改为一开始就不加，到 Task 10 类型齐全时一次加上，少一次来回 |
+| 8 | **`SessionVerdict.severity` 由 `Severity` 改为 `Option<Severity>`**（v2.0.0，发布后） | 本计划与 spec 都规定「无威胁时填 `Severity::Low` 占位，调用方应只读 `decision`」。端到端示例一不留神就打印出 `ALLOW · severity=LOW` —— 一条完全放行的正常请求在日志里读起来像个发现。**类型上写「这个字段有一种情况下别看」必然会被踩**，故改为 `None` 表示无威胁，不设占位值。文中所有「占位」措辞已作废 |
 
 计划基于的 spec 中另有一处已就地修正：`MemoryStore::get` 原样返回记录不过滤过期（过期判定归 `guard`），否则 `TokenExpired` 与 `TokenUnknown` 无法区分。
 
@@ -550,6 +551,7 @@ pub enum Decision {
 pub struct SessionVerdict {
     pub decision: Decision,
     /// 无威胁时为 `Severity::Low` 占位 —— 此时该字段无意义，调用方应只读 `decision`。
+    /// ⚠️ 已作废，见「执行结果」#8：v2.0.0 起为 `Option<Severity>`，无威胁时为 `None`。
     pub severity: Severity,
     pub threats: Vec<SessionThreat>,
 }
@@ -2320,7 +2322,7 @@ impl<S: SessionStore> SessionGuard<S> {
 | `TokenExpired` | Low | Block |
 | `LocationChanged` / `TimestampSkew` | Medium | Challenge |
 
-多个威胁并存时，decision 取最严格者，severity 取最严重者。verdict 为 `Allow` 时 `severity` 是 `Low` 占位值，调用方应只读 `decision`。
+多个威胁并存时，decision 取最严格者，severity 取最严重者。~~verdict 为 `Allow` 时 `severity` 是 `Low` 占位值，调用方应只读 `decision`。~~ **（已作废，见「执行结果」#8）** v2.0.0 起 `severity` 为 `Option<Severity>`，放行时为 `None` —— 没有威胁就是没有严重度，不设占位值。
 
 ### SessionConfig
 
