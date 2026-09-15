@@ -98,6 +98,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+Остальные метки состояний тоже реализуют `Display` и выводятся в верхнем регистре: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (например, `impossible travel (11205 km/h)`), `AttackCategory` (в нижнем регистре, например `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`) и `ThrottleOutcome` (`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## Модули с состоянием
 
 `session` и `throttle` **намеренно не** реализуют трейт `Detector`: они хранят состояние и привязаны к идентичности, а `Detector::detect(&self, input: &str)` не способен выразить составной вход из токена, отпечатка, местоположения и времени. `score` — чистый расчёт над `DetectionResult`.
@@ -106,7 +112,7 @@ println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 use security_rust::{
     Decision, MemoryStore, MemoryThrottleStore, Scanner,
     SessionConfig, SessionGuard, SessionVerdict,
-    Throttle, ThrottleConfig, ThrottleDecision,
+    Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome,
 };
 
 // Защита сессии — fail-closed: Decision::Block при отказе хранилища
@@ -123,6 +129,14 @@ match throttle.check("user:42", now) {
     ThrottleDecision::Allow { .. } => { /* пропустить */ }
     ThrottleDecision::Banned { until } => { /* бан до `until` */ }
     ThrottleDecision::Unavailable => { /* решать самостоятельно */ }
+
+
+// Объединить несколько измерений (например, IP + аккаунт): побеждает самый строгий результат
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);
+match throttle.record_failure("user:42", now) {
+    Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
+    Err(_) => { /* сбой хранилища */ }
+}
 }
 
 // Оценка риска: агрегировать отдельные сигналы в измеримую величину
@@ -136,23 +150,27 @@ let risk = Scanner::default().assess(input);
 | `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
 | `SessionGuard::rotate` | обновляет токен сессии |
 | `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
-| `SessionVerdict` | `decision: Decision`, `severity: Severity`, `threats: Vec<SessionThreat>` |
+| `SessionVerdict` | `decision: Decision`, `severity: Option<Severity>` (`None` при пропуске), `threats: Vec<SessionThreat>` |
 | `Decision` | `Allow` \| `Challenge` \| `Block` |
 | `SessionConfig` | `ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300 |
 | `SessionStore` | трейт хранилища сессий; `MemoryStore` — встроенная реализация в памяти |
 | `Throttle::check` | `fn check(&self, key: &str, now: u64) -> ThrottleDecision` |
-| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>` |
+| `Throttle::check_any` | `fn check_any(&self, keys: &[&str], now: u64) -> ThrottleDecision` — объединяет несколько измерений: побеждает `Banned` (с самым поздним `until`), иначе `Unavailable`, иначе `Allow` с минимальным `remaining` |
+| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError>` |
 | `Throttle::record_success` / `reset` / `purge_expired` | `fn record_success(&self, key: &str) -> Result<(), StoreError>` / `fn reset(&self, key: &str) -> Result<(), StoreError>` / `fn purge_expired(&self, now: u64) -> Result<usize, StoreError>` |
 | `ThrottleConfig` | `threshold` 5, `window_secs` 60, `ban_secs` 900 |
-| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` |
+| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` — только из `check` / `check_any` |
+| `ThrottleOutcome` | `Allow { remaining }` \| `Banned { until }` — результат `record_failure`; без `Unavailable`, потому что сбой хранилища возвращается там как `Err(StoreError)` |
 | `ThrottleStore` | трейт хранилища счётчиков; `MemoryThrottleStore` — встроенная реализация в памяти |
 | `RiskLevel` | `None` \| `Low` \| `Medium` \| `High` \| `Critical` |
 | `RiskAssessment` | результат `Scanner::assess` |
 | `Scanner::assess` | `fn assess(&self, input: &str) -> RiskAssessment` |
 
-Обратите внимание: `ThrottleDecision::Allow { remaining: 0 }` означает, что **этот** запрос нужно отклонить — лимит исчерпан, а не «осталась ещё одна попытка». Ветка называется `Allow`, а не `Banned`, потому что в этот момент бан не действует.
+Обратите внимание: `ThrottleDecision::Allow { remaining: 0 }` означает, что **этот** запрос нужно отклонить — лимит исчерпан, а не «осталась ещё одна попытка». Ветка называется `Allow`, а не `Banned`, потому что в этот момент бан не действует. `Unavailable` возникает только в `check` / `check_any`; `record_failure` возвращает `ThrottleOutcome`, где этой ветки сознательно нет — сбой хранилища превращается там в `Err(StoreError)`.
 
 `RequestContext` целиком заполняет вызывающая сторона: библиотека не содержит геобазы и не проверяет подписи — она лишь сравнивает переданные значения с базой, сохранённой при `bind`.
+
+`subject` **используется только в `bind`, а `verify` полностью его игнорирует** — проверяемая на каждом запросе идентичность всегда берётся из серверного `SessionRecord` (история чужих локаций агрегируется по `record.subject`), а значение, переданное запрашивающей стороной, не является доверенным. Поэтому `subject: ""` из middleware допустим (`bind` — тот требует непустое значение). Именно поэтому сюда **ни в коем случае** нельзя подставлять идентификатор пользователя из заголовка запроса: сегодня он не доходит до решения, но будущий рефакторинг не обязан это сохранять.
 
 ## Пути модулей
 

@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+The other state labels implement `Display` too and print in uppercase: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (e.g. `impossible travel (11205 km/h)`), `AttackCategory` (lowercase, e.g. `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`), and `ThrottleOutcome` (`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ### Risk Scoring
 
 ```rust
@@ -159,7 +165,7 @@ Session security: client hijacking, data tampering, foreign-location login, and 
 | Type | Fields / Variants |
 |------|------|
 | `RequestContext<'a>` | `token: &'a str`, `subject: &'a str`, `fingerprint: &'a str`, `location: Option<&'a str>`, `coords: Option<(f64, f64)>`, `signature: Option<&'a str>`, `at: Option<u64>` |
-| `SessionVerdict` | `decision: Decision`, `severity: Severity`, `threats: Vec<SessionThreat>` |
+| `SessionVerdict` | `decision: Decision`, `severity: Option<Severity>` (`None` when allowed), `threats: Vec<SessionThreat>` |
 | `Decision` | `Allow` \| `Challenge` \| `Block` |
 | `SessionThreat` | `TokenUnknown` \| `TokenExpired` \| `TokenRevoked` \| `FingerprintMismatch` \| `SignatureInvalid` \| `SignatureMissing` \| `SignatureUnexpected` \| `LocationChanged` \| `ImpossibleTravel { kmh: f64 }` \| `TimestampSkew` \| `StoreUnavailable` |
 | `SessionConfig` | `ttl_secs: u64`, `impossible_travel_kmh: f64`, `timestamp_skew_secs: u64` |
@@ -169,6 +175,8 @@ Session security: client hijacking, data tampering, foreign-location login, and 
 | `StoreError` | `Unavailable` \| `Corrupt` |
 
 `RequestContext` carries no framework types on purpose: tokens, signatures, and coordinates are all supplied by the caller, so the crate still depends on nothing but `regex`. The `subject` is what foreign-location history aggregates on — not the token.
+
+`subject` **is used only by `bind`; `verify` ignores it entirely** — the identity checked on every request always comes from the server-side `SessionRecord` (foreign-location history aggregates on `record.subject`), and the value supplied by the caller is not trusted. `subject: ""` from a middleware is therefore valid (`bind` is the one that requires it non-empty). Which is exactly why a user identifier taken from a request header must **never** be put here: it cannot reach the decision today, but a future refactor is not bound to keep it that way.
 
 ### SessionGuard
 
@@ -293,7 +301,8 @@ Sliding-window rate limiting, threshold banning, and account lockout.
 | Type | Fields / Variants |
 |------|---------|
 | `ThrottleConfig` | `threshold: u32`, `window_secs: u64`, `ban_secs: u64` |
-| `ThrottleDecision` | `Allow { remaining: u32 }` \| `Banned { until: u64 }` \| `Unavailable` |
+| `ThrottleDecision` | `Allow { remaining: u32 }` \| `Banned { until: u64 }` \| `Unavailable` — produced by `check` / `check_any` only |
+| `ThrottleOutcome` | `Allow { remaining: u32 }` \| `Banned { until: u64 }` — the result of `record_failure`; it has no `Unavailable`, because a store failure comes back as `Err(StoreError)` |
 | `ThrottleStore` | Backing store trait |
 | `MemoryThrottleStore` | In-process store |
 
@@ -309,8 +318,14 @@ impl<S: ThrottleStore> Throttle<S> {
     /// Call on request entry: checks the ban, then computes the remaining budget.
     pub fn check(&self, key: &str, now: u64) -> ThrottleDecision;
 
-    /// Call on authentication failure.
-    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>;
+    /// Checks several dimensions at once (e.g. IP + account) and returns the strictest
+    /// outcome: any `Banned` wins (latest `until`), else `Unavailable`, else `Allow` with
+    /// the smallest `remaining`. An empty slice yields `Allow { remaining: 0 }`.
+    pub fn check_any(&self, keys: &[&str], now: u64) -> ThrottleDecision;
+
+    /// Call on authentication failure. Returns `ThrottleOutcome`, not `ThrottleDecision`:
+    /// the `Unavailable` variant is unreachable here (a store failure is an `Err`).
+    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError>;
 
     /// Call on authentication success: clears the failure count, keeps any ban.
     pub fn record_success(&self, key: &str) -> Result<(), StoreError>;
@@ -325,12 +340,15 @@ impl<S: ThrottleStore> Throttle<S> {
 ### Example
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 let now = 1_700_000_000;
 
 assert_eq!(throttle.check("acct:user-42", now), ThrottleDecision::Allow { remaining: 5 });
+
+// Merge several dimensions (e.g. IP + account): the strictest outcome wins.
+let _merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);
 
 for _ in 0..4 {
     throttle.record_failure("acct:user-42", now).unwrap();
@@ -339,7 +357,7 @@ for _ in 0..4 {
 // Allow { remaining: 0 } instead.
 assert_eq!(
     throttle.record_failure("acct:user-42", now).unwrap(),
-    ThrottleDecision::Banned { until: now + 900 }
+    ThrottleOutcome::Banned { until: now + 900 }
 );
 ```
 
@@ -347,7 +365,7 @@ assert_eq!(
 
 **`Allow { remaining: 0 }` means the request should be rejected.** The budget is spent, not "one more attempt left"; a caller that treats it as a pass makes the last unit of budget meaningless. It is not reported as `Banned` because no ban is in effect at that moment — with `ban_secs = 0`, a drained key stays in this arm indefinitely.
 
-**`Unavailable` is a deliberate exception to fail-closed.** Unlike `SessionGuard`, a store failure yields `ThrottleDecision::Unavailable` and **never** `Banned`. Rate limiting is defense in depth, not the primary authentication gate: banning everyone on a backend blip is a self-inflicted DoS that an attacker may even be able to provoke, whereas letting traffic through only loses brute-force protection for that window — `SessionGuard` is still blocking. The caller decides; allowing with an alert is the expected choice. `check` maps only `Err` to this variant, by construction.
+**`Unavailable` is a deliberate exception to fail-closed.** Unlike `SessionGuard`, a store failure yields `ThrottleDecision::Unavailable` and **never** `Banned`. Rate limiting is defense in depth, not the primary authentication gate: banning everyone on a backend blip is a self-inflicted DoS that an attacker may even be able to provoke, whereas letting traffic through only loses brute-force protection for that window — `SessionGuard` is still blocking. The caller decides; allowing with an alert is the expected choice. **`Unavailable` is produced by `check` / `check_any` only**: `check` maps only `Err` to it and never to `Banned`, and `ThrottleOutcome` (what `record_failure` returns) has no such variant at all — a store failure there is an `Err`, so the caller never has to write a dead match arm. `check_any` merges several dimensions by strictness: any `Banned` wins with the latest `until`, otherwise any `Unavailable`, otherwise `Allow` with the smallest `remaining`; an empty slice yields `Allow { remaining: 0 }`.
 
 **`record_failure` counts and bans in two separate store operations, so it is not atomic.** A concurrent `reset` between them can re-ban a user who just authenticated — an availability problem, not a bypass, since the failure really was recorded. Eliminating the window means folding count + threshold + ban into a single store operation. Similarly, if the ban write fails this call returns `Err` while the count is already stored; the next `check` then reports `Allow { remaining: 0 }`, and the caller rejects on that.
 

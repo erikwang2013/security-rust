@@ -95,7 +95,7 @@
 | **jndi_injection** | `${jndi:ldap://`, обфускация `${lower:j}`, обфускация `${upper:j}`, обфускация пустой строкой `${::-j}`, поиск переменных окружения `${env:}`, системные свойства `${sys:}` | Critical |
 | **ssi_injection** | Выполнение команд `<!--#exec cmd=`, включение файлов `<!--#include file=`, вывод переменных `<!--#echo var=`, информация о файлах `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Интроспекционные запросы `__schema`/`__type`, DoS через глубокую вложенность (≥5 уровней) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, побег из песочницы через Python MRO `__mro__`/`__subclasses__()` | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **вычисление внутри разделителей** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, цепочки побега Python `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; сами разделители сигналом не являются, простой плейсхолдер вида `${x}` не репортится | Critical |
 | **format_string** | спецификаторы записи `%n` (в том числе с модификаторами длины), завышенная ширина `%123456d`, повторяющиеся спецификаторы `%x`/`%p`/`%s` (утечка форматной строки / повреждение памяти) | Medium |
 
 ### Протокольные атаки и атаки на запросы (11 детекторов)
@@ -108,7 +108,7 @@
 | **host_header** | Инъекция множественных Host-заголовков, отравление `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`, Host с CRLF | High |
 | **request_smuggling** | Двойной заголовок `Transfer-Encoding`, контрабанда через `Content-Length: 0`, путаница завершения chunked `\r\n0\r\n` | High |
 | **open_redirect** | Протокол-относительные URL `//evil.com`, переходы по псевдопротоколам `javascript:`/`data:text/html` | Medium |
-| **cors** | Обход через `Origin: null`, комбинация `Access-Control-Allow-Origin: *` + Credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (канонический признак sandbox-iframe и CSWSH) и `Access-Control-Allow-Origin: *` **вместе с** `Access-Control-Allow-Credentials: true`. По отдельности и то и другое нормально для публичных API и статики и не репортится | Medium |
 | **websocket** | `Origin: null` одновременно с WebSocket-апгрейдом (CSWSH), `ws://` на loopback/приватные/link-local адреса (включая endpoint метаданных облака `169.254.169.254`) | High |
 | **dns_rebinding** | Host-заголовок с внутренними IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | обфускация lookup `${lower:j}`/`${upper:j}`, обфускация пустой строкой `${::-j}`, вложенные lookup `${${...}:...}`, URL-кодированный вариант `%24%7b...%7d...ndi` | Critical |
@@ -119,7 +119,7 @@
 | Детектор | Покрываемые паттерны | Серьёзность |
 |----------|----------------------|-------------|
 | **deserialization** | PHP-объекты сериализации `O:число:`/`C:число:`, массивы `a:число:{`, вызовы `unserialize()`, магические методы `__wakeup`/`__destruct`/`__toString` и др. | Critical |
-| **csv_injection** | Символы формул `=`/`+`/`-`/`@` в начале строки, DDE (динамический обмен данными), командный конвейер `cmd\|`, функция `@SUM()` | Medium |
+| **csv_injection** | Символы формул в начале ячейки `=`/`+`/`-`/`@` (табуляция и возврат каретки — это **разделители**, а не начало формулы), `=` сразу после разделителя `,`/`;`/`\t`, DDE (динамический обмен данными), командный конвейер `cmd\|`, функция `@SUM()` | Medium |
 | **mail_header** | Инъекция скрытой копии `Bcc:`/`Cc:`, множественные отправители `From:`, инъекция MIME-заголовков `MIME-Version:`/`Content-Type: multipart`, манипуляция границей `boundary=` | Medium |
 | **jwt_attack** | Обход через пустой алгоритм `alg: none`, обход пути через `kid`, пустой сегмент подписи, пустой сегмент payload | High |
 | **prototype_pollution** | Загрязнение цепочки прототипов `__proto__`/`constructor.prototype`, перехват свойств `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
@@ -143,7 +143,7 @@
 | Модуль | Тип | Назначение |
 |------|------|------|
 | `session` | `SessionGuard<S: SessionStore>` | Безопасность сессий: перехват клиента, подмена данных, вход из необычного места, токен-сессии. Методы `bind`/`verify`/`revoke`/`revoke_all`/`rotate`; `Decision { Allow, Challenge, Block }` + `SessionThreat`; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300); трейт `SessionStore` + `MemoryStore` |
-| `throttle` | `Throttle<S: ThrottleStore>` | Ограничение частоты и бан: скользящее окно, бан по порогу, блокировка учётной записи. Методы `check`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `throttle` | `Throttle<S: ThrottleStore>` | Ограничение частоты и бан: скользящее окно, бан по порогу, блокировка учётной записи. Методы `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900); `record_failure` возвращает `ThrottleOutcome` (`Allow`/`Banned`), без `Unavailable` |
 | `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Оценка риска: агрегирует отдельные сигналы низкой серьёзности в измеримую величину. `RiskLevel { None, Low, Medium, High, Critical }` |
 
 **Асимметрия при сбоях намеренна.** При отказе хранилища `SessionGuard` возвращает `Decision::Block` (`StoreUnavailable`) — fail-closed, запрос никогда не пропускается. `Throttle` — сознательное исключение: ограничение частоты относится к эшелонированной защите, а не к основному барьеру аутентификации, поэтому сбой бэкенда возвращает `ThrottleDecision::Unavailable`, а не `Banned` — заблокировать всех пользователей было бы само-DoS. Решение остаётся за вызывающей стороной.

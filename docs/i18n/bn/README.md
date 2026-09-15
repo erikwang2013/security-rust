@@ -88,7 +88,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 `session` ও `throttle` ইচ্ছাকৃতভাবে `Detector` trait প্রয়োগ করে না, কারণ তাদের ইনপুট যৌগিক — টোকেন + ফিঙ্গারপ্রিন্ট + অবস্থান + সময় — যা `Detector::detect(&str)` প্রকাশ করতে পারে না। নিচের তিনটি মডিউল স্ট্রিং স্ক্যানিংয়ের উপরের স্তর গঠন করে:
 
 - **`session`** — সেশন নিরাপত্তা: ক্লায়েন্ট হাইজ্যাকিং, ডেটা টেম্পারিং, ভিন্ন স্থান থেকে লগইন, টোকেন সেশন। এতে রয়েছে `SessionGuard<S: SessionStore>`: `bind`/`verify`/`revoke`/`revoke_all`/`rotate`। ডিফল্ট: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300। স্টোর ব্যর্থ হলে ফলাফল `Decision::Block` (কারণ `StoreUnavailable`) — অর্থাৎ **fail-closed**, পাস করার কোনো পথ নেই।
-- **`throttle`** — রেট লিমিট ও নিষিদ্ধকরণ: স্লাইডিং উইন্ডো + থ্রেশহোল্ড নিষিদ্ধকরণ + অ্যাকাউন্ট লক। এতে রয়েছে `Throttle<S: ThrottleStore>`: `check`/`record_failure`/`record_success`/`reset`/`purge_expired`, এবং এটি ফেরত দেয় `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`। ডিফল্ট: threshold 5, window_secs 60, ban_secs 900। এটি **ইচ্ছাকৃত ব্যতিক্রম**: স্টোর ব্যর্থ হলে এটি `Banned` নয়, `Unavailable` ফেরত দেয় — ব্যাকএন্ড গোলযোগে সব ব্যবহারকারীকে আটকে দেওয়া হলো নিজের বিরুদ্ধে DoS, আর সিদ্ধান্ত কলারের হাতে থাকে।
+- **`throttle`** — রেট লিমিট ও নিষিদ্ধকরণ: স্লাইডিং উইন্ডো + থ্রেশহোল্ড নিষিদ্ধকরণ + অ্যাকাউন্ট লক। এতে রয়েছে `Throttle<S: ThrottleStore>`: `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`, এবং এটি ফেরত দেয় `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`। ডিফল্ট: threshold 5, window_secs 60, ban_secs 900। এটি **ইচ্ছাকৃত ব্যতিক্রম**: স্টোর ব্যর্থ হলে এটি `Banned` নয়, `Unavailable` ফেরত দেয় — ব্যাকএন্ড গোলযোগে সব ব্যবহারকারীকে আটকে দেওয়া হলো নিজের বিরুদ্ধে DoS, আর সিদ্ধান্ত কলারের হাতে থাকে। আর `record_failure` ফেরত দেয় `ThrottleOutcome` (`Allow`/`Banned`), `Unavailable` ছাড়া।
 - **`score`** — ঝুঁকি স্কোরিং: আলাদা আলাদা নিম্ন-গুরুতার সংকেতকে পরিমেয় মানে সমন্বয় করা, যাতে ফলস-পজিটিভ সীমা টিউন করা যায়। `RiskLevel { None, Low, Medium, High, Critical }`, `RiskAssessment`, এবং `Scanner::assess(&str) -> RiskAssessment`।
 
 `session` ও `throttle` দুটোই স্টোরেজের জন্য trait অ্যাবস্ট্রাকশন ব্যবহার করে; একাধিক ইনস্ট্যান্সে ডিপ্লয়ের জন্য এই trait প্রয়োগ করে Redis-এ যুক্ত করা যায়।
@@ -110,7 +110,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` অবফাসকেশন, `${upper:j}` অবফাসকেশন, `${::-j}` খালি স্ট্রিং অবফাসকেশন, `${env:}` এনভায়রনমেন্ট ভেরিয়েবল লুকআপ, `${sys:}` সিস্টেম প্রপার্টি | Critical |
 | **ssi_injection** | `<!--#exec cmd=` কমান্ড এক্সিকিউশন, `<!--#include file=` ফাইল ইনক্লুশন, `<!--#echo var=` ভেরিয়েবল আউটপুট, `<!--#fsize`/`<!--#flastmod` ফাইল তথ্য | High |
 | **graphql_injection** | `__schema`/`__type` ইন্ট্রোস্পেকশন কুয়েরি, ডিপ নেস্টেড DoS (≥৫ লেভেল) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python MRO `__mro__`/`__subclasses__()` স্যান্ডবক্স এস্কেপ | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **ডেলিমিটারের ভিতরে মূল্যায়ন** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python এস্কেপ চেইন `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; ডেলিমিটার নিজে কোনো সংকেত নয়, তাই `${x}`-এর মতো সাধারণ প্লেসহোল্ডার রিপোর্ট হয় না | Critical |
 | **format_string** | মেমরি-লেখার `%n` স্পেসিফায়ার (`%n`/`%1$n`/`%hn`/`%ln`), বড়-প্রস্থের কনভার্সন `%123456d`, মেমরি ফাঁসের জন্য `%x`/`%p`/`%s`-এর ঘন পুনরাবৃত্তি | Medium |
 
 ### প্রোটোকল ও রিকোয়েস্ট আক্রমণ (১১টি ডিটেক্টর)
@@ -123,7 +123,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | **host_header** | একাধিক Host হেডার ইনজেকশন, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` পয়জনিং, CRLF-সহ Host ক্যারিয়িং | High |
 | **request_smuggling** | দ্বৈত `Transfer-Encoding` হেডার, `Content-Length: 0` স্মাগলিং, `\r\n0\r\n` chunked টার্মিনেশন অবফাসকেশন | High |
 | **open_redirect** | `//evil.com` প্রোটোকল-রিলেটিভ URL, `javascript:`/`data:text/html` সিউডো-প্রোটোকল জাম্প | Medium |
-| **cors** | `Origin: null` বাইপাস, `Access-Control-Allow-Origin: *` + Credentials কম্বিনেশন | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (স্যান্ডবক্স iframe ও CSWSH-এর প্রামাণ্য সূচক), এবং `Access-Control-Allow-Origin: *` **একসাথে** `Access-Control-Allow-Credentials: true`। আলাদাভাবে দুটিই পাবলিক API ও স্ট্যাটিক রিসোর্সে স্বাভাবিক, রিপোর্ট হয় না | Medium |
 | **websocket** | একইসাথে `Origin: null` ও WebSocket আপগ্রেড (CSWSH), `ws://` লুপব্যাক/প্রাইভেট/লিঙ্ক-লোকাল ঠিকানা লক্ষ্য করা (ক্লাউড মেটাডেটা এন্ডপয়েন্ট `169.254.169.254` সহ) | High |
 | **dns_rebinding** | Host হেডারে `127.x`/`10.x`/`192.168.x`/`172.16-31.x` ইন্টারনাল IP, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:j}` অবফাসকেশন, `${::-j}` খালি-স্ট্রিং অবফাসকেশন, নেস্টেড `jndi` লুকআপ, এবং URL-এনকোডেড রূপ `%24%7b...%3a...%7d...ndi` | Critical |
@@ -134,7 +134,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | ডিটেক্টর | কভার করা প্যাটার্ন | গুরুতরতা |
 |--------|---------|--------|
 | **deserialization** | PHP `O:সংখ্যা:`/`C:সংখ্যা:` সিরিয়ালাইজড অবজেক্ট, `a:সংখ্যা:{` অ্যারে, `unserialize()` কল, `__wakeup`/`__destruct`/`__toString` ইত্যাদি ম্যাজিক মেথড | Critical |
-| **csv_injection** | সারির শুরুতে `=`/`+`/`-`/`@` ফর্মুলা অক্ষর, DDE ডাইনামিক ডেটা এক্সচেঞ্জ, `cmd\|` কমান্ড পাইপ, `@SUM()` ফাংশন | Medium |
+| **csv_injection** | সেলের শুরুতে `=`/`+`/`-`/`@` ফর্মুলা অক্ষর (ট্যাব ও ক্যারেজ রিটার্ন **বিভাজক**, ফর্মুলার সূচনা নয়), `,`/`;`/`\t` বিভাজকের পরে সরাসরি `=`, DDE ডাইনামিক ডেটা এক্সচেঞ্জ, `cmd\|` কমান্ড পাইপ, `@SUM()` ফাংশন | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ব্লাইন্ড কার্বন কপি ইনজেকশন, `From:` একাধিক প্রেরক, `MIME-Version:`/`Content-Type: multipart` MIME হেডার ইনজেকশন, `boundary=` বাউন্ডারি ম্যানিপুলেশন | Medium |
 | **jwt_attack** | `alg: none` খালি অ্যালগরিদম বাইপাস, `kid` পাথ ট্রাভার্সাল ইনজেকশন, খালি সিগনেচার সেগমেন্ট, খালি payload সেগমেন্ট | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` প্রোটোটাইপ চেইন পলিউশন, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` প্রপার্টি হাইজ্যাকিং | High |

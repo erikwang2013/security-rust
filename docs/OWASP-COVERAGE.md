@@ -66,11 +66,11 @@
 | `log4shell` | Log4j lookup 混淆：`${lower:x}`、`${::-x}` 嵌套、URL 编码 `%24%7b`，覆盖 `jndi/lower/upper/env/sys/date/java/base64/...` |
 | `ssi_injection` | `<!--#exec cmd=` / `<!--#include file=` / `<!--#echo var=` / `#fsize` / `#flastmod` / `#config` / `#printenv` |
 | `graphql_injection` | `__schema` / `__type {` / `__typename` 内省，以及五层以上嵌套查询 |
-| `ssti` | `{{ }}` / `${ }` / `{% %}`、`<%=` / `<%@`、`#set(`、Python 逃逸链 `__mro__` / `__subclasses__` / `__globals__` / `__builtins__` / `__class__` |
+| `ssti` | 模板定界符内的**求值**写法（`{{7*7}}`、`${7*7}`）、`{{config`、`${T(java.lang.Runtime)}`、`{% %}`、`<%=` / `<%@`、`#set(`、Python 逃逸链 `__mro__` / `__subclasses__` / `__globals__` / `__builtins__` / `__class__` / `__dict__`；定界符本身不是信号，`${x}` 这类纯占位符不报 |
 | `format_string` | `%n` 写内存（含位数与长度修饰符组合）、`%999999d`、连续 `%x` / `%s` 泄露栈 |
 | `header_injection` | CRLF 后接 `Set-Cookie` / `Location` / `Content-Length` / `Transfer-Encoding` / `Refresh` / `Status` / `WWW-Authenticate`，或 `%0d` 与 `%0a` 同时出现 |
 | `mail_header` | `Bcc:` / `Cc:` / `MIME-Version:` / `boundary=`、`Content-Type: ...multipart`、重复 `From:` |
-| `csv_injection` | 行首 `= + - @ \t \r`、`DDE`、`cmd\|`、`@SUM(` |
+| `csv_injection` | 单元格起始的 `= + - @`（制表符与回车是分隔符，不算起始符）、分隔符 `,` / `;` / `\t` 之后紧跟非空白的 `=`、`DDE`、`cmd\|`、`@SUM(` |
 | `formula_injection` | 行首或分隔符后的公式起始符 + `cmd\|` / `HYPERLINK` / `IMPORTXML` / `IMPORTDATA` / `IMPORTRANGE` / `IMPORTFEED` / `WEBSERVICE` / `FILTERXML` / `RTD` / `EXEC`、`DDE(`、DDE 外部引用（`'file'!A1`） |
 
 **缺口**（这一节比上面那张表重要）：
@@ -90,7 +90,7 @@
 
 #### A05 Security Misconfiguration —— 🟡 看见的是载荷，不是配置
 
-- `cors`：`Origin: null`、`Access-Control-Allow-Origin: *`、`Access-Control-Allow-Credentials: true`。
+- `cors`：`Access-Control-Allow-Origin: null`、`Origin: null`，以及 `Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**。单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 在公开 API 与静态资源里是常态，不报。
 - `header_injection`：响应头注入（CRLF 拆出 `Location` / `Set-Cookie` 等）。
 - `host_header`：CRLF 后伪造 `Host`、`X-Forwarded-*`、`X-Original-URL`、`X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部。
 - `request_smuggling`：重复 `Transfer-Encoding`、`Transfer-Encoding: chunked`。
@@ -112,8 +112,8 @@
 
 #### A07 Identification and Authentication Failures —— 🟡 管会话，不管认证
 
-- `session::SessionGuard` 检查：token 未知 / 已过期 / 已吊销、指纹不匹配（会话固定/劫持）、签名不匹配或缺失（常量时间比较）、请求时间偏移（重放）、位置变化、不可能旅行、store 不可用（fail-closed → `Block`）。返回 `SessionVerdict { decision: Allow | Challenge | Block, severity, threats }`，并支持 `revoke` / `revoke_all` / `rotate`。
-- `throttle::Throttle` 按 key 统计窗口内失败次数，达到阈值即封禁 —— 面向暴力破解与撞库。store 故障时返回 `Unavailable` 而**不是** `Banned`（限流是纵深防御，不是主闸门，不让后端抖动变成自我 DoS）。
+- `session::SessionGuard` 检查：token 未知 / 已过期 / 已吊销、指纹不匹配（会话固定/劫持）、签名不匹配或缺失（常量时间比较）、请求时间偏移（重放）、位置变化、不可能旅行、store 不可用（fail-closed → `Block`）。返回 `SessionVerdict { decision: Allow | Challenge | Block, severity: Option<Severity>, threats }`（放行时 `severity` 为 `None`），并支持 `revoke` / `revoke_all` / `rotate`。
+- `throttle::Throttle` 按 key 统计窗口内失败次数，达到阈值即封禁 —— 面向暴力破解与撞库；`check_any` 可一次合并多个维度（如 IP + 账号）后取最严格结论。store 故障时 `check` / `check_any` 返回 `Unavailable` 而**不是** `Banned`（限流是纵深防御，不是主闸门，不让后端抖动变成自我 DoS）。
 - `jwt_attack` 匹配 `"alg":"none"`、`"kid"` 指向 `../` 或 `/dev/null`、`eyJ...eyJ...` 的无签名/截断 JWT 结构。
 
 **缺口**：不做认证本身。不校验口令、不做 MFA、不查泄露口令库、不签发 token、**不计算 MAC** —— `RequestContext.signature` 必须是调用方算好的值传进来。`session` 判的是「这个会话是否被劫持或篡改」，不判「这个人凭据是否正确」；`throttle` 判的是「这个 key 试太多次了」，同样不等于身份可信。
@@ -168,9 +168,9 @@
 
 另需注意几处**设计上的误报面**（属取舍而非缺陷，调用方需自行判读）：
 
-- `csv_injection` 认行首 `= + - @ \t \r`，正常文本里以 `-` 或 `=` 开头的行会命中（属粗粒度层，靠 `Scanner::assess` 的累积评分而非单条命中下判断）。
-- `cors` 的 `Access-Control-Allow-Origin: *`、`Origin: null` 在合法场景（公开静态资源、沙箱 iframe、`file://` 页面）也会出现。
-- `ssti` 认 `${` / `{{ }}` 这类模板语法，前端模板源码或 i18n 占位符可能命中。
+- `csv_injection` 认单元格起始的 `=` / `+` / `-` / `@`，正常文本里以 `= ` 或 `-` 开头的行（如 `= 5`、`-3 just`）仍会命中；制表符与回车已按分隔符处理，不再是起始符。属粗粒度层，靠 `Scanner::assess` 的累积评分而非单条命中下判断。
+- `cors` 的单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 已不再命中；残留的是 `Origin: null` —— 它在合法场景（沙箱 iframe、`file://` 页面、部分代理）里也会出现。
+- `ssti` 单写 `${x}` / `{{ name }}` 这类占位符已不再命中；残留的是 `{% %}`、`<%=`、`#set(` 这类模板语法形态 —— 扫描模板源码、代码片段或 diff 时会命中，需由调用方按上下文判读。
 
 ---
 

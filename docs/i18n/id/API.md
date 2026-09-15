@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+Label status lainnya juga mengimplementasikan `Display` dan dicetak huruf besar: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (mis. `impossible travel (11205 km/h)`), `AttackCategory` (huruf kecil, mis. `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`), dan `ThrottleOutcome` (`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## Modul Stateful dan Penilaian Risiko
 
 Ketiga modul ini tersedia langsung dari akar crate. `session` dan `throttle` sengaja tidak mengimplementasikan trait `Detector` karena inputnya majemuk. Tidak ada dependensi eksternal baru: token dan signature (MAC) disediakan pemanggil, dan parsing lokasi juga tanggung jawab pemanggil.
@@ -119,7 +125,8 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ```
 
 - Bidang `RequestContext`: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
-- Bidang `SessionVerdict`: `decision`, `severity`, `threats`
+- Bidang `SessionVerdict`: `decision`, `severity: Option<Severity>` (`None` saat diizinkan), `threats`
+- `subject` **hanya dipakai `bind`; `verify` mengabaikannya sepenuhnya**: identitas tiap permintaan selalu diambil dari `SessionRecord` di server (riwayat lokasi asing diagregasi pada `record.subject`), dan `subject` yang dikirim pemanggil tidak tepercaya; karena itu `subject: ""` dari middleware sah (`bind` yang menuntut nilai tidak kosong). Justru karena itu **jangan pernah** menaruh identitas pengguna dari header permintaan di sini — hari ini ia tidak sampai ke keputusan, tetapi refactor di masa depan tidak wajib mempertahankannya.
 - `Decision`: `Allow` | `Challenge` | `Block`
 - Saat penyimpanan tidak tersedia hasilnya `Decision::Block` (sebab `StoreUnavailable`) — jadi **fail-closed**, tidak ada jalur yang meloloskan
 - Default `SessionConfig`: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300
@@ -128,7 +135,7 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ### `throttle` — pembatasan laju
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
@@ -137,14 +144,18 @@ match throttle.check(key, now) {
     ThrottleDecision::Banned { until } => { /* diblokir */ }
     ThrottleDecision::Unavailable => { /* penyimpanan tidak tersedia */ }
 }
-throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+// Periksa beberapa dimensi sekaligus (mis. IP + akun): hasil terketat yang dipakai
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
 throttle.purge_expired(now)?;        // Result<usize, StoreError>
 ```
 
 - Default `ThrottleConfig`: `threshold` = 5, `window_secs` = 60, `ban_secs` = 900
-- **Pengecualian yang disengaja**: saat penyimpanan gagal ia mengembalikan `Unavailable`, bukan `Banned` — pembatasan laju adalah defense-in-depth, bukan gerbang autentikasi utama; memblokir semua pengguna karena gangguan backend adalah DoS terhadap diri sendiri, dan keputusannya diserahkan ke pemanggil
+- `check_any(&[key, ...], now)` menggabungkan beberapa dimensi: `Banned` menang (dengan `until` terjauh), jika tidak `Unavailable`, jika tidak `Allow` dengan `remaining` terkecil; daftar kosong menghasilkan `Allow { remaining: 0 }`
+- `ThrottleOutcome` (`Allow { remaining }` | `Banned { until }`) adalah hasil `record_failure`; tidak memuat `Unavailable` karena kegagalan penyimpanan kembali sebagai `Err(StoreError)`
+- **Pengecualian yang disengaja**: saat penyimpanan gagal `check` / `check_any` mengembalikan `Unavailable`, bukan `Banned` — pembatasan laju adalah defense-in-depth, bukan gerbang autentikasi utama; memblokir semua pengguna karena gangguan backend adalah DoS terhadap diri sendiri, dan keputusannya diserahkan ke pemanggil
 - Penyimpanan diabstraksi melalui trait `ThrottleStore`, implementasi siap pakai `MemoryThrottleStore`
 
 ### `score` — penilaian risiko

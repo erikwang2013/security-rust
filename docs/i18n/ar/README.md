@@ -88,7 +88,7 @@
 لا تنفّذ `session` و`throttle` الـ trait `Detector` عمدًا، لأن مدخلاتها مركّبة (توكن + بصمة + موقع + وقت) ولا يعبّر عنها `Detector::detect(&str)`. تشكّل الوحدات الثلاث التالية الطبقة التي تعلو الفحص النصي:
 
 - **`session`** — أمان الجلسات: اختطاف العميل، والتلاعب بالبيانات، وتسجيل الدخول من موقع آخر، وجلسات التوكن. توفّر `SessionGuard<S: SessionStore>` مع `bind`/`verify`/`revoke`/`revoke_all`/`rotate`. الافتراضات: `ttl_secs` = 3600، و`impossible_travel_kmh` = 900.0، و`timestamp_skew_secs` = 300. عند تعذّر الوصول إلى المخزن تكون النتيجة `Decision::Block` (والسبب `StoreUnavailable`) — أي **fail-closed**، ولا يوجد مسار يسمح بالمرور.
-- **`throttle`** — الحد من المعدل والمنع: نافذة منزلقة + عتبة تمنع + قفل الحساب. توفّر `Throttle<S: ThrottleStore>` مع `check`/`record_failure`/`record_success`/`reset`/`purge_expired`، وتُعيد `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`. الافتراضات: threshold 5، وwindow_secs 60، وban_secs 900. وهذا **استثناء مقصود**: عند تعطّل المخزن تُعيد `Unavailable` وليس `Banned` — منع جميع المستخدمين بسبب خلل في الخلفية هو حجب للذات (self-DoS)، وقرار التصرف يبقى للمستدعي.
+- **`throttle`** — الحد من المعدل والمنع: نافذة منزلقة + عتبة تمنع + قفل الحساب. توفّر `Throttle<S: ThrottleStore>` مع `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`، وتُعيد `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`. الافتراضات: threshold 5، وwindow_secs 60، وban_secs 900. وهذا **استثناء مقصود**: عند تعطّل المخزن تُعيد `Unavailable` وليس `Banned` — منع جميع المستخدمين بسبب خلل في الخلفية هو حجب للذات (self-DoS)، وقرار التصرف يبقى للمستدعي. و`record_failure` يُعيد `ThrottleOutcome` (`Allow`/`Banned`) بلا `Unavailable`.
 - **`score`** — تقييم المخاطر: تجميع الإشارات الفردية منخفضة الخطورة في كمية قابلة للقياس، لضبط حدّ الإنذار الكاذب. `RiskLevel { None, Low, Medium, High, Critical }`، و`RiskAssessment`، و`Scanner::assess(&str) -> RiskAssessment`.
 
 تستخدم `session` و`throttle` تجريدًا عبر trait للمخزن، لذا يكفي تنفيذ هذا الـ trait للاتصال بـ Redis عند التشغيل على عدة نسخ.
@@ -110,7 +110,7 @@
 | **jndi_injection** | `${jndi:ldap://`، تشويش `${lower:j}`، تشويش `${upper:j}`، تشويش السلسلة الفارغة `${::-j}`، البحث في متغيرات البيئة `${env:}`، خصائص النظام `${sys:}` | Critical |
 | **ssi_injection** | تنفيذ أوامر `<!--#exec cmd=`، تضمين ملف `<!--#include file=`، إخراج متغير `<!--#echo var=`، معلومات الملفات `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | استعلامات الفحص الداخلي `__schema`/`__type`، DoS بالتدرج العميق (≥5 مستويات) | Medium |
-| **ssti** | Jinja2 `{{}}`، FreeMarker `${}`، ERB `<%=` `<%@`، Velocity `#set()`، هروب من الصندوق الرمل عبر MRO في بايثون `__mro__`/`__subclasses__()` | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **تقييم داخل المحددات** (`{{7*7}}`، `${7*7}`، `{{config`، `${T(java.lang.Runtime)}`)، ERB `<%=` `<%@`، Velocity `#set()`، سلاسل الهروب في بايثون `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`؛ المحددات وحدها ليست إشارة، فلا يُبلَّغ عن عنصر نائب مثل `${x}` | Critical |
 | **format_string** | محددات `%n` لكتابة الذاكرة (`%n`/`%1$n`/`%hn`/`%ln`)، وأحرف تحويل بعرض كبير `%123456d`، وتكرار كثيف لمحددات `%x`/`%p`/`%s` لتسريب الذاكرة | Medium |
 
 ### هجمات البروتوكول والطلبات (11 كاشفًا)
@@ -123,7 +123,7 @@
 | **host_header** | حقن رؤوس Host متعددة، تسميم `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`، حمل Host عبر CRLF | High |
 | **request_smuggling** | رؤوس `Transfer-Encoding` مزدوجة، تهريب `Content-Length: 0`، تشويش إنهاء chunked `\r\n0\r\n` | High |
 | **open_redirect** | عناوين نسبية للبروتوكول `//evil.com`، قفزات البروتوكولات الزائفة `javascript:`/`data:text/html` | Medium |
-| **cors** | تجاوز `Origin: null`، تركيبة `Access-Control-Allow-Origin: *` + Credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`، `Origin: null` (المؤشر القياسي لإطارات iframe المعزولة وCSWSH)، و`Access-Control-Allow-Origin: *` **مع** `Access-Control-Allow-Credentials: true`. كلٌّ منهما منفردًا طبيعي في واجهات API العامة والموارد الثابتة ولا يُبلَّغ عنه | Medium |
 | **websocket** | `Origin: null` مع ترقية WebSocket في الوقت نفسه (CSWSH)، `ws://` موجّه إلى عناوين loopback أو الخاصة أو link-local (بما فيها نقطة نهاية البيانات الوصفية السحابية `169.254.169.254`) | High |
 | **dns_rebinding** | رأس Host بعناوين IP داخلية `127.x`/`10.x`/`192.168.x`/`172.16-31.x`، `localhost`، `::1`، `0.0.0.0` | High |
 | **log4shell** | تشويش `${lower:j}`/`${upper:j}`، وتشويش السلسلة الفارغة `${::-j}`، والبحث المتداخل `jndi`، والنظير المرمّز بـ URL `%24%7b...%3a...%7d...ndi` | Critical |
@@ -134,7 +134,7 @@
 | الكاشف | الأنماط المغطاة | الخطورة |
 |--------|---------|--------|
 | **deserialization** | كائنات متسلسلة PHP `O:رقم:`/`C:رقم:`، مصفوفات `a:رقم:{`، استدعاءات `unserialize()`، طرق سحرية `__wakeup`/`__destruct`/`__toString` وما يشابهها | Critical |
-| **csv_injection** | أحرف صيغ بداية الخلية `=`/`+`/`-`/`@`، تبادل البيانات الديناميكي DDE، أنبوب أوامر `cmd\|`، دالة `@SUM()` | Medium |
+| **csv_injection** | أحرف الصيغ في بداية الخلية `=`/`+`/`-`/`@` (الجدولة وحرف الإرجاع **فاصلان** وليسا بداية صيغة)، و`=` يلي فاصل `,`/`;`/`\t` مباشرةً، وتبادل البيانات الديناميكي DDE، وأنبوب أوامر `cmd\|`، ودالة `@SUM()` | Medium |
 | **mail_header** | حقن نسخة مخفية `Bcc:`/`Cc:`، مرسلون متعددون `From:`، حقن ترويسات MIME `MIME-Version:`/`Content-Type: multipart`، التلاعب بالحدود `boundary=` | Medium |
 | **jwt_attack** | تجاوز الخوارزمية الفارغة `alg: none`، حقن اجتياز المسار `kid`، مقطع توقيع فارغ، مقطع payload فارغ | High |
 | **prototype_pollution** | تلوث سلسلة النماذج الأولية `__proto__`/`constructor.prototype`، اختطاف الخصائص `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |

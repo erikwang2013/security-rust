@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+বাকি স্টেট লেবেলগুলিও `Display` প্রয়োগ করে এবং বড় হাতের অক্ষরে ছাপে: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (যেমন `impossible travel (11205 km/h)`), `AttackCategory` (ছোট হাতের, যেমন `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`), `ThrottleOutcome` (`ALLOW` / `BANNED`)।
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## স্টেটফুল মডিউল ও ঝুঁকি স্কোরিং
 
 এই তিনটি মডিউল সরাসরি ক্রেট রুট থেকে পাওয়া যায়। `session` ও `throttle` ইচ্ছাকৃতভাবে `Detector` trait প্রয়োগ করে না, কারণ তাদের ইনপুট মিশ্র। কোনো নতুন বাহ্যিক নির্ভরতা যোগ হয় না: token ও signature (MAC) কলার সরবরাহ করে, এবং লোকেশন পার্স করাও কলারের দায়িত্ব।
@@ -119,7 +125,8 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ```
 
 - `RequestContext` ক্ষেত্র: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
-- `SessionVerdict` ক্ষেত্র: `decision`, `severity`, `threats`
+- `SessionVerdict` ক্ষেত্র: `decision`, `severity: Option<Severity>` (অনুমোদন হলে `None`), `threats`
+- `subject` **শুধু `bind` ব্যবহার করে, `verify` এটিকে সম্পূর্ণ উপেক্ষা করে**: প্রতি অনুরোধের পরিচয় সবসময় সার্ভারের `SessionRecord` থেকে নেওয়া হয় (ভিন্ন-স্থানের ইতিহাস `record.subject`-এ জমা হয়), আর অনুরোধকারীর পাঠানো `subject` অবিশ্বাসযোগ্য; তাই মিডলওয়্যার থেকে `subject: ""` পাঠানো বৈধ (`bind`-ই অখালি মান দাবি করে)। ঠিক এ কারণেই **কখনও** অনুরোধ হেডার থেকে নেওয়া ব্যবহারকারী-পরিচয় এখানে বসানো উচিত নয় — আজ তা সিদ্ধান্তে পৌঁছায় না, কিন্তু ভবিষ্যতের রিফ্যাক্টর তা বজায় রাখতে বাধ্য নয়।
 - `Decision`: `Allow` | `Challenge` | `Block`
 - স্টোর unavailable হলে ফলাফল `Decision::Block` (কারণ `StoreUnavailable`) — অর্থাৎ **fail-closed**, কোনো পথ খোলা থাকে না
 - `SessionConfig` ডিফল্ট: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300
@@ -128,7 +135,7 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ### `throttle` — রেট সীমা
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
@@ -137,14 +144,18 @@ match throttle.check(key, now) {
     ThrottleDecision::Banned { until } => { /* নিষিদ্ধ */ }
     ThrottleDecision::Unavailable => { /* স্টোর unavailable */ }
 }
-throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+// একসাথে একাধিক মাত্রা পরীক্ষা (যেমন IP + অ্যাকাউন্ট): সবচেয়ে কঠোর ফলটিই গৃহীত হয়
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
 throttle.purge_expired(now)?;        // Result<usize, StoreError>
 ```
 
 - `ThrottleConfig` ডিফল্ট: `threshold` = 5, `window_secs` = 60, `ban_secs` = 900
-- **ইচ্ছাকৃত ব্যতিক্রম**: স্টোর ব্যর্থ হলে এটি `Banned` নয়, `Unavailable` ফেরত দেয় — রেট সীমা defense-in-depth, মূল প্রমাণীকরণের দরজা নয়; ব্যাকএন্ড গোলযোগে সব ব্যবহারকারীকে আটকানো নিজের বিরুদ্ধে DoS, আর সিদ্ধান্ত কলারের হাতে ছাড়া
+- `check_any(&[key, ...], now)` একাধিক মাত্রা একত্র করে: কোনোটি `Banned` হলে সেটিই জেতে (সর্বাধিক দূরের `until`), নাহলে `Unavailable`, নাহলে ক্ষুদ্রতম `remaining`-সহ `Allow`; খালি তালিকা দিলে `Allow { remaining: 0 }`
+- `ThrottleOutcome` (`Allow { remaining }` | `Banned { until }`) হলো `record_failure`-এর ফল; এতে `Unavailable` নেই, কারণ স্টোর ব্যর্থতা সেখানে `Err(StoreError)` হয়ে ফেরে
+- **ইচ্ছাকৃত ব্যতিক্রম**: স্টোর ব্যর্থ হলে `check` / `check_any` `Banned` নয়, `Unavailable` ফেরত দেয় — রেট সীমা defense-in-depth, মূল প্রমাণীকরণের দরজা নয়; ব্যাকএন্ড গোলযোগে সব ব্যবহারকারীকে আটকানো নিজের বিরুদ্ধে DoS, আর সিদ্ধান্ত কলারের হাতে ছাড়া
 - স্টোর trait `ThrottleStore` দিয়ে বিমূর্ত, প্রস্তুত বাস্তবায়ন `MemoryThrottleStore`
 
 ### `score` — ঝুঁকি স্কোরিং

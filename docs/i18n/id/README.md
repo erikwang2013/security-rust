@@ -88,7 +88,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 `session` dan `throttle` sengaja tidak mengimplementasikan trait `Detector`, karena inputnya majemuk — token + fingerprint + lokasi + waktu — yang tidak dapat diungkapkan oleh `Detector::detect(&str)`. Tiga modul berikut membentuk lapisan di atas pemindaian string:
 
 - **`session`** — keamanan sesi: pembajakan klien, perusakan data, login dari lokasi berbeda, sesi token. Menyediakan `SessionGuard<S: SessionStore>`: `bind`/`verify`/`revoke`/`revoke_all`/`rotate`. Default: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300. Saat penyimpanan gagal, hasilnya `Decision::Block` (sebab `StoreUnavailable`) — jadi **fail-closed**, tidak ada jalur yang meloloskan.
-- **`throttle`** — pembatasan laju dan pemblokiran: sliding window + pemblokiran ambang + penguncian akun. `Throttle<S: ThrottleStore>`: `check`/`record_failure`/`record_success`/`reset`/`purge_expired`, dan mengembalikan `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`. Default: threshold 5, window_secs 60, ban_secs 900. Ini **pengecualian yang disengaja**: saat penyimpanan gagal ia mengembalikan `Unavailable`, bukan `Banned` — memblokir semua pengguna karena gangguan backend adalah DoS terhadap diri sendiri, dan keputusannya diserahkan ke pemanggil.
+- **`throttle`** — pembatasan laju dan pemblokiran: sliding window + pemblokiran ambang + penguncian akun. `Throttle<S: ThrottleStore>`: `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`, dan mengembalikan `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`. Default: threshold 5, window_secs 60, ban_secs 900. Ini **pengecualian yang disengaja**: saat penyimpanan gagal ia mengembalikan `Unavailable`, bukan `Banned` — memblokir semua pengguna karena gangguan backend adalah DoS terhadap diri sendiri, dan keputusannya diserahkan ke pemanggil. `record_failure` mengembalikan `ThrottleOutcome` (`Allow`/`Banned`), tanpa `Unavailable`.
 - **`score`** — penilaian risiko: menggabungkan sinyal berisiko rendah yang terpisah menjadi besaran terukur, agar ambang positif palsu dapat disetel. `RiskLevel { None, Low, Medium, High, Critical }`, `RiskAssessment`, dan `Scanner::assess(&str) -> RiskAssessment`.
 
 `session` dan `throttle` keduanya memakai abstraksi trait untuk penyimpanan; untuk deployment multi-instans, implementasikan trait tersebut untuk terhubung ke Redis.
@@ -110,7 +110,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | **jndi_injection** | `${jndi:ldap://`, obfuscation `${lower:j}`, obfuscation `${upper:j}`, obfuscasi string kosong `${::-j}`, lookup variabel lingkungan `${env:}`, properti sistem `${sys:}` | Critical |
 | **ssi_injection** | Eksekusi perintah `<!--#exec cmd=`, inklusi file `<!--#include file=`, output variabel `<!--#echo var=`, info file `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Query introspeksi `__schema`/`__type`, DoS bersarang dalam (≥5 lapis) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, escape sandbox Python MRO `__mro__`/`__subclasses__()` | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **evaluasi di dalam delimiter** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, rantai escape Python `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; delimiter saja bukan sinyal, placeholder biasa seperti `${x}` tidak dilaporkan | Critical |
 | **format_string** | Spesifier `%n` penulis memori (`%n`/`%1$n`/`%hn`/`%ln`), konversi lebar besar `%123456d`, pengulangan rapat `%x`/`%p`/`%s` untuk kebocoran memori | Medium |
 
 ### Serangan Protokol & Permintaan (11 detektor)
@@ -123,7 +123,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | **host_header** | Injeksi beberapa Host header, poisoning `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`, Host dengan CRLF | High |
 | **request_smuggling** | Header `Transfer-Encoding` ganda, penyelundupan `Content-Length: 0`, obfuscation terminasi chunked `\r\n0\r\n` | High |
 | **open_redirect** | URL relatif protokol `//evil.com`, lompatan protokol semu `javascript:`/`data:text/html` | Medium |
-| **cors** | Bypass `Origin: null`, kombinasi `Access-Control-Allow-Origin: *` + Credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (indikator kanonis untuk iframe sandbox dan CSWSH), dan `Access-Control-Allow-Origin: *` **bersamaan dengan** `Access-Control-Allow-Credentials: true`. Masing-masing sendirian normal untuk API publik dan aset statis dan tidak dilaporkan | Medium |
 | **websocket** | `Origin: null` bersamaan dengan upgrade WebSocket (CSWSH), `ws://` menuju alamat loopback/pribadi/link-local (termasuk endpoint metadata cloud `169.254.169.254`) | High |
 | **dns_rebinding** | Host header berupa IP intranet `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | Obfuskasi `${lower:j}`/`${upper:j}`, obfuskasi string kosong `${::-j}`, lookup `jndi` bersarang, dan bentuk terenkode URL `%24%7b...%3a...%7d...ndi` | Critical |
@@ -134,7 +134,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
 | **deserialization** | Objek serialisasi PHP `O:angka:`/`C:angka:`, array `a:angka:{`, pemanggilan `unserialize()`, metode magic seperti `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Karakter formula di awal baris `=`/`+`/`-`/`@`, DDE dynamic data exchange, pipe perintah `cmd\|`, fungsi `@SUM()` | Medium |
+| **csv_injection** | Karakter formula di awal sel `=`/`+`/`-`/`@` (tab dan carriage return adalah **pemisah**, bukan awal formula), `=` tepat setelah pemisah `,`/`;`/`\t`, DDE dynamic data exchange, pipe perintah `cmd\|`, fungsi `@SUM()` | Medium |
 | **mail_header** | Injeksi salinan tersembunyi `Bcc:`/`Cc:`, beberapa pengirim `From:`, injeksi header MIME `MIME-Version:`/`Content-Type: multipart`, manipulasi `boundary=` | Medium |
 | **jwt_attack** | Bypass algoritma kosong `alg: none`, injeksi path traversal `kid`, segmen tanda tangan kosong, segmen payload kosong | High |
 | **prototype_pollution** | Polusi rantai prototipe `__proto__`/`constructor.prototype`, pembajakan properti `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |

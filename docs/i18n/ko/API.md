@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+`Severity` 외의 상태 레이블도 `Display`를 구현하며 모두 대문자로 출력됩니다: `Decision`(`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat`(예: `impossible travel (11205 km/h)`), `AttackCategory`(소문자, 예: `injection`), `ThrottleDecision`(`ALLOW` / `BANNED` / `UNAVAILABLE`), `ThrottleOutcome`(`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## 세션 보안 (`session`)
 
 클라이언트의 세션 탈취, 데이터 변조, 불가능한 이동(짧은 시간 내의 지리적 이동), token 세션 폐기를 판정한다.
@@ -132,7 +138,7 @@ match verdict.decision {
 ```
 
 - `SessionGuard<S: SessionStore>` — `bind` / `verify` / `revoke` / `revoke_all` / `rotate`
-- `SessionVerdict` — `decision: Decision`(`Allow` / `Challenge` / `Block`), `severity`, `threats: Vec<SessionThreat>`
+- `SessionVerdict` — `decision: Decision`(`Allow` / `Challenge` / `Block`), `severity: Option<Severity>`(통과 시 `None`), `threats: Vec<SessionThreat>`
 - `SessionConfig` — `ttl_secs`(기본 3600), `impossible_travel_kmh`(기본 900.0), `timestamp_skew_secs`(기본 300)
 - `SessionStore` trait과 `MemoryStore`
 
@@ -140,12 +146,14 @@ match verdict.decision {
 
 `token`과 `signature`(MAC)는 호출자가 준비하고, `location` / `coords`도 호출자가 파싱해 넘긴다. 라이브러리 의존성을 `regex` 하나로 유지하기 위해 token 발급도, 서명 검증도, geo 데이터베이스도 갖지 않는다.
 
+`subject`는 **`bind`만 사용하며 `verify`는 완전히 무시한다** — 요청마다 검증되는 신원은 항상 서버 측 `SessionRecord`에서 오고(원격지 이력은 `record.subject`로 집계된다), 호출자가 넘긴 `subject`는 신뢰할 수 없다. 따라서 미들웨어에서 `subject: ""`를 넘기는 것은 정당하다(비어 있지 않은 값을 요구하는 쪽은 `bind`이다). 바로 그렇기 때문에 요청 헤더의 사용자 식별자를 여기에 **절대** 넣어서는 안 된다. 오늘은 판정에 도달하지 않지만, 향후 리팩터링이 그것을 유지할 의무는 없다.
+
 ## 속도 제한과 차단 (`throttle`)
 
 슬라이딩 윈도 내 실패 횟수 집계, 임계치 도달 시 차단, 계정 잠금을 담당한다.
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let now = 1_700_000_000u64;
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
@@ -158,18 +166,24 @@ match throttle.check("user:42", now) {
     ThrottleDecision::Unavailable => { /* 백엔드 장애. 판단은 호출자에게 */ }
 }
 
+// 여러 차원을 하나로 합친다(예: IP + 계정). 가장 엄격한 결과가 채택된다
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+
 // 인증 실패·성공을 기록해 윈도를 진행시킨다
-throttle.record_failure("user:42", now)?;
+match throttle.record_failure("user:42", now) {
+    Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
+    Err(_) => { /* 저장소 장애 */ }
+}
 throttle.record_success("user:42")?;
 ```
 
-- `Throttle<S: ThrottleStore>` — `check` / `record_failure` / `record_success` / `reset` / `purge_expired`
+- `Throttle<S: ThrottleStore>` — `check` / `check_any` / `record_failure` / `record_success` / `reset` / `purge_expired`
 - `ThrottleConfig` — `threshold`(기본 5), `window_secs`(기본 60), `ban_secs`(기본 900)
 - `ThrottleStore` trait과 `MemoryThrottleStore`
 
 `Allow { remaining: 0 }`은 "한 번 더 시도 가능"이 아니라 "이 요청은 거부해야 함"을 뜻한다.
 
-**가용성 측의 예외** — 저장소 장애 시 `ThrottleDecision::Unavailable`을 반환하며 `Banned`로는 만들지 않는다. 전체 사용자를 막아서는 것은 자기 DoS이고, 속도 제한은 주된 인증 게이트가 아니라 다층 방어이기 때문이다. `SessionGuard`의 fail-closed와 의도적으로 다르며, 이 분기는 `check`에 고정되어 있다(`Err`가 `Banned`로 사상되는 일은 없다).
+**가용성 측의 예외** — 저장소 장애 시 `check` / `check_any`가 `ThrottleDecision::Unavailable`을 반환하며 `Banned`로는 만들지 않는다. 전체 사용자를 막아서는 것은 자기 DoS이고, 속도 제한은 주된 인증 게이트가 아니라 다층 방어이기 때문이다. `SessionGuard`의 fail-closed와 의도적으로 다르다. `Unavailable`은 `check` / `check_any`만 반환하며, `record_failure`는 이 변종이 없는 `ThrottleOutcome`을 반환한다(저장소 장애는 `Err(StoreError)`가 된다). `check_any`는 여러 차원을 합쳐 `Banned`가 있으면 가장 늦은 `until`로 `Banned`, 없으면 `Unavailable`, 없으면 가장 작은 `remaining`으로 `Allow`를 반환하고, 빈 목록은 `Allow { remaining: 0 }`이 된다.
 
 **저장소** — 두 모듈 모두 `SessionStore` / `ThrottleStore` trait으로 백엔드를 추상화한다. 다중 인스턴스 배포에서는 이 trait을 구현해 Redis 등을 끼워 넣으면 된다.
 

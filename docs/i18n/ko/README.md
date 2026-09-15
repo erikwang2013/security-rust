@@ -79,7 +79,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | 데이터 | `src/data/` | 7 | PHP 역직렬화, CSV 인젝션, 스프레드시트 수식 인젝션, 메일 헤더 인젝션, JWT 공격, 프로토타입 폴루션, ReDoS |
 | 파일 | `src/file/` | 3 | 경로 탐색, 악성 파일 업로드, 민감 데이터 유출 |
 | 세션 | `src/session/` | — | `SessionGuard`, `RequestContext`, `SessionVerdict`, `SessionStore`/`MemoryStore` —— 클라이언트 탈취, 데이터 변조, 불가능한 이동, token 폐기 판정 |
-| 속도 제한 | `src/throttle/` | — | `Throttle`, `ThrottleDecision`, `ThrottleStore`/`MemoryThrottleStore` —— 슬라이딩 윈도, 임계치 차단, 계정 잠금 |
+| 속도 제한 | `src/throttle/` | — | `Throttle`(`check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`), `ThrottleDecision`, `ThrottleOutcome`, `ThrottleStore`/`MemoryThrottleStore` —— 슬라이딩 윈도, 임계치 차단, 계정 잠금 |
 | 스코어링 | `src/score.rs` | — | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` —— 저위험 신호를 집계해 관측 가능한 위험 값으로 만든다 |
 
 ### 탐지 결과 구조
@@ -103,7 +103,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` 난독화, `${upper:j}` 난독화, `${::-j}` 빈 문자열 난독화, `${env:}` 환경 변수 조회, `${sys:}` 시스템 속성 | Critical |
 | **ssi_injection** | `<!--#exec cmd=` 명령 실행, `<!--#include file=` 파일 포함, `<!--#echo var=` 변수 출력, `<!--#fsize`/`<!--#flastmod` 파일 정보 | High |
 | **graphql_injection** | `__schema`/`__type` 인트로스펙션 쿼리, 심층 중첩 DoS(5단계 이상) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python MRO `__mro__`/`__subclasses__()` 샌드박스 탈출 | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **구분자 내부의 평가**(`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python 이스케이프 체인 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; 구분자 자체는 신호가 아니므로 `${x}` 같은 단순 플레이스홀더는 보고하지 않는다 | Critical |
 | **format_string** | `%n`/`%hn`/`%lln` 메모리 쓰기 변환자, `%99999999d` 너비 폭탄, 연속 `%x%x%x`·구분자 포함 `%08x.%08x.%08x.%08x` 스택 읽기, 연속 `%s` | Medium |
 
 ### 프로토콜 및 요청 공격 (11개 탐지기)
@@ -116,7 +116,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | **host_header** | 다중 Host 헤더 인젝션, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` 포이즈닝, Host에 딸린 CRLF | High |
 | **request_smuggling** | 이중 `Transfer-Encoding` 헤더, `Content-Length: 0` 스머글링, `\r\n0\r\n` chunked 종료 난독화 | High |
 | **open_redirect** | `//evil.com` 프로토콜 상대 URL, `javascript:`/`data:text/html` 의사 프로토콜 점프 | Medium |
-| **cors** | `Origin: null` 우회, `Access-Control-Allow-Origin: *` + Credentials 조합 | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null`(샌드박스 iframe과 CSWSH의 정규 지표), 그리고 `Access-Control-Allow-Origin: *`와 `Access-Control-Allow-Credentials: true`의 **동시 출현**. 단독으로는 공개 API와 정적 자산에서 정상이므로 보고하지 않는다 | Medium |
 | **websocket** | `Origin: null` 과 WebSocket 업그레이드의 동시 출현(CSWSH), `ws://` 가 루프백/사설/링크 로컬 주소를 가리키는 경우(클라우드 메타데이터 엔드포인트 `169.254.169.254` 포함) | High |
 | **dns_rebinding** | Host 헤더가 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 사설 IP, `localhost`, `::1`, `0.0.0.0`인 경우 | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` 대소문자 접기, `${::-j}` 접두사 접기, lookup 전개 후 `ndi:`가 나타나는 난독화, `${${...}}` 중첩 전개, URL 인코딩 형태 `%24%7b...%7d` | Critical |
@@ -127,7 +127,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
 | **deserialization** | PHP `O:숫자:`/`C:숫자:` 직렬화 객체, `a:숫자:{` 배열, `unserialize()` 호출, `__wakeup`/`__destruct`/`__toString` 등 매직 메서드 | Critical |
-| **csv_injection** | 행 시작 `=`/`+`/`-`/`@` 수식 문자, DDE 동적 데이터 교환, `cmd\|` 명령 파이프, `@SUM()` 함수 | Medium |
+| **csv_injection** | 셀 선두의 `=`/`+`/`-`/`@` 수식 문자(탭과 캐리지 리턴은 **구분자**이며 수식 시작이 아니다), 구분자 `,`/`;`/`\t` 직후의 `=`, DDE 동적 데이터 교환, `cmd\|` 명령 파이프, `@SUM()` 함수 | Medium |
 | **mail_header** | `Bcc:`/`Cc:` 숨은 참조 인젝션, `From:` 다중 발신자, `MIME-Version:`/`Content-Type: multipart` MIME 헤더 인젝션, `boundary=` 경계 조작 | Medium |
 | **jwt_attack** | `alg: none` 빈 알고리즘 우회, `kid` 경로 탐색 인젝션, 빈 서명 세그먼트, 빈 payload 세그먼트 | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` 프로토타입 체인 폴루션, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` 속성 하이재킹 | High |

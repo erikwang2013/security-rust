@@ -106,7 +106,7 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` obfuscation, `${upper:j}` obfuscation, `${::-j}` empty-string obfuscation, `${env:}` environment variable lookups, `${sys:}` system properties | Critical |
 | **ssi_injection** | Command execution via `<!--#exec cmd=`, file inclusion via `<!--#include file=`, variable output via `<!--#echo var=`, file info via `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | `__schema`/`__type` introspection queries, deeply nested DoS (≥5 levels) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python MRO `__mro__`/`__subclasses__()` sandbox escapes | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **evaluation inside the delimiters** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python escape chains `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; the delimiters alone are not a signal, so a plain placeholder like `${x}` is not reported | Critical |
 | **format_string** | Memory write via `%n`/`%hn`/`%lln`/`%1$n`, width bombs `%99999999d`, stack reads `%x%x%x`/`%p%p%p`, delimited dumps `%08x.%08x.%08x.%08x`, four or more consecutive `%s`, mixed `%s%x%p%n` chains | Medium |
 
 ### Protocol and Request Attacks (11 Detectors)
@@ -119,7 +119,7 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 | **host_header** | Multiple Host header injection, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` poisoning, CRLF smuggling in Host | High |
 | **request_smuggling** | Duplicate `Transfer-Encoding` headers, `Content-Length: 0` smuggling, `\r\n0\r\n` chunked termination obfuscation | High |
 | **open_redirect** | Protocol-relative URLs `//evil.com`, pseudo-protocol redirects via `javascript:`/`data:text/html` | Medium |
-| **cors** | `Origin: null` bypass, `Access-Control-Allow-Origin: *` combined with credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (the canonical indicator for sandboxed iframes and CSWSH), and `Access-Control-Allow-Origin: *` **together with** `Access-Control-Allow-Credentials: true`. Either one alone is normal for public APIs and static assets and is not reported | Medium |
 | **websocket** | `Origin: null` co-occurring with a WebSocket upgrade (CSWSH), `ws://` targeting loopback / private / link-local addresses (including the cloud metadata endpoint `169.254.169.254`) | High |
 | **dns_rebinding** | Host header as private IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` case-folding, `${::-j}` prefix folding, `${<lookup>:...}ndi:` where the lookup expands into `jndi`, nested `${${<lookup>...}}` expansion, URL-encoded `%24%7b...%7d...ndi` | Critical |
@@ -130,7 +130,7 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
 | **deserialization** | PHP serialized objects `O:<digits>:`/`C:<digits>:`, arrays `a:<digits>:{`, `unserialize()` calls, magic methods such as `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Formula characters `=`/`+`/`-`/`@` at the start of a cell, DDE (Dynamic Data Exchange), command pipe `cmd\|`, `@SUM()` functions | Medium |
+| **csv_injection** | Formula characters `=`/`+`/`-`/`@` at the start of a cell (tab and carriage return are **separators**, not formula starts), an `=` directly followed by a non-blank after a `,`/`;`/`\t` separator (a formula in the second cell of a TSV/CSV row), DDE (Dynamic Data Exchange), command pipe `cmd\|`, `@SUM()` functions | Medium |
 | **mail_header** | Blind carbon copy injection via `Bcc:`/`Cc:`, multiple senders in `From:`, MIME header injection via `MIME-Version:`/`Content-Type: multipart`, `boundary=` manipulation | Medium |
 | **jwt_attack** | `alg: none` algorithm bypass, `kid` path traversal injection, empty signature segment, empty payload segment | High |
 | **prototype_pollution** | Prototype chain pollution via `__proto__`/`constructor.prototype`, property hijacking via `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
@@ -197,20 +197,26 @@ let verdict = guard.verify(&hijack, now + 30);
 assert_eq!(verdict.decision, Decision::Block);
 ```
 
-`verify` returns a `SessionVerdict` rather than a `Result`, because on an auth path "reject" is a normal outcome that callers must handle. The verdict carries a `decision` (`Allow` / `Challenge` / `Block`) and the `threats` behind it. Note that `SessionVerdict::allow()` leaves `severity` at its `Severity::Low` placeholder — read `decision`, not `severity`, when there are no threats.
+`verify` returns a `SessionVerdict` rather than a `Result`, because on an auth path "reject" is a normal outcome that callers must handle. The verdict carries a `decision` (`Allow` / `Challenge` / `Block`) and the `threats` behind it. `severity` is an `Option<Severity>`, and a clean allow leaves it at `None`: no finding means no severity, and a stand-in low value would read in the logs exactly like a real low-severity hit.
+
+`RequestContext::subject` is used by `bind` only — `verify` ignores it entirely. The identity checked on every request always comes from the server-side `SessionRecord` (foreign-location history aggregates on `record.subject`), so a subject supplied by the request is not trusted; passing `subject: ""` from middleware is valid. Never put a user identifier from a request header in this field as if it were an identity: it cannot reach the decision today, and a future refactor is not bound to keep it that way.
 
 `bind` and `verify` return `Decision::Block` on a store failure rather than allowing the request through: failing open on a backend error is a bypass an attacker can trigger deliberately.
 
 ### Rate Limiting and Banning
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 let now = 1_700_000_000;
 
-// A fresh key has the full budget.
-assert_eq!(throttle.check("acct:user-42", now), ThrottleDecision::Allow { remaining: 5 });
+// A fresh key has the full budget. A real request has two dimensions (IP and
+// account); `check_any` queries them in one call and merges by strictness.
+assert_eq!(
+    throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now),
+    ThrottleDecision::Allow { remaining: 5 }
+);
 
 // Each failed login consumes one attempt; the 5th returns Banned, not Allow { remaining: 0 }.
 for _ in 0..4 {
@@ -218,7 +224,7 @@ for _ in 0..4 {
 }
 assert_eq!(
     throttle.record_failure("acct:user-42", now).unwrap(),
-    ThrottleDecision::Banned { until: now + 900 }
+    ThrottleOutcome::Banned { until: now + 900 }
 );
 ```
 

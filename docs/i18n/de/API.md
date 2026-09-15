@@ -98,6 +98,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+Auch die übrigen Zustandslabels sind als `Display` implementiert und werden in Großbuchstaben ausgegeben: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (z. B. `impossible travel (11205 km/h)`), `AttackCategory` (kleingeschrieben, z. B. `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`) und `ThrottleOutcome` (`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## Zustandsbehaftete Module
 
 `session` und `throttle` implementieren **absichtlich nicht** das `Detector`-Trait: Sie sind zustandsbehaftet und identitätsbezogen, und `Detector::detect(&self, input: &str)` kann eine zusammengesetzte Eingabe aus Token, Fingerabdruck, Position und Zeit nicht ausdrücken. `score` ist ein reiner Rechenbaustein über `DetectionResult`.
@@ -106,7 +112,7 @@ println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 use security_rust::{
     Decision, MemoryStore, MemoryThrottleStore, Scanner,
     SessionConfig, SessionGuard, SessionVerdict,
-    Throttle, ThrottleConfig, ThrottleDecision,
+    Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome,
 };
 
 // Sitzungsschutz — fail-closed: bei Speicherfehler Decision::Block
@@ -123,6 +129,14 @@ match throttle.check("user:42", now) {
     ThrottleDecision::Allow { .. } => { /* durchlassen */ }
     ThrottleDecision::Banned { until } => { /* gesperrt bis `until` */ }
     ThrottleDecision::Unavailable => { /* selbst entscheiden */ }
+
+
+// Mehrere Dimensionen zusammenführen (z. B. IP + Konto): das strengste Ergebnis gewinnt
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);
+match throttle.record_failure("user:42", now) {
+    Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
+    Err(_) => { /* Speicherfehler */ }
+}
 }
 
 // Risikobewertung: Einzelsignale zu einer messbaren Größe aggregieren
@@ -136,23 +150,27 @@ let risk = Scanner::default().assess(input);
 | `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
 | `SessionGuard::rotate` | erneuert das Token einer Sitzung |
 | `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
-| `SessionVerdict` | `decision: Decision`, `severity: Severity`, `threats: Vec<SessionThreat>` |
+| `SessionVerdict` | `decision: Decision`, `severity: Option<Severity>` (bei Freigabe `None`), `threats: Vec<SessionThreat>` |
 | `Decision` | `Allow` \| `Challenge` \| `Block` |
 | `SessionConfig` | `ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300 |
 | `SessionStore` | Trait für den Sitzungsspeicher; `MemoryStore` ist die mitgelieferte In-Memory-Implementierung |
 | `Throttle::check` | `fn check(&self, key: &str, now: u64) -> ThrottleDecision` |
-| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>` |
+| `Throttle::check_any` | `fn check_any(&self, keys: &[&str], now: u64) -> ThrottleDecision` — führt mehrere Dimensionen zusammen: `Banned` schlägt alles (spätestes `until`), sonst `Unavailable`, sonst `Allow` mit dem kleinsten `remaining` |
+| `Throttle::record_failure` | `fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError>` |
 | `Throttle::record_success` / `reset` / `purge_expired` | `fn record_success(&self, key: &str) -> Result<(), StoreError>` / `fn reset(&self, key: &str) -> Result<(), StoreError>` / `fn purge_expired(&self, now: u64) -> Result<usize, StoreError>` |
 | `ThrottleConfig` | `threshold` 5, `window_secs` 60, `ban_secs` 900 |
-| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` |
+| `ThrottleDecision` | `Allow { remaining }` \| `Banned { until }` \| `Unavailable` — nur aus `check` / `check_any` |
+| `ThrottleOutcome` | `Allow { remaining }` \| `Banned { until }` — Ergebnis von `record_failure`; ohne `Unavailable`, weil ein Speicherfehler dort als `Err(StoreError)` zurückkommt |
 | `ThrottleStore` | Trait für den Zähler-Speicher; `MemoryThrottleStore` ist die mitgelieferte In-Memory-Implementierung |
 | `RiskLevel` | `None` \| `Low` \| `Medium` \| `High` \| `Critical` |
 | `RiskAssessment` | Ergebnis von `Scanner::assess` |
 | `Scanner::assess` | `fn assess(&self, input: &str) -> RiskAssessment` |
 
-Zu beachten: `ThrottleDecision::Allow { remaining: 0 }` bedeutet, dass **diese** Anfrage abzulehnen ist — das Kontingent ist verbraucht, nicht „noch ein Versuch übrig". Der Zweig heißt `Allow` und nicht `Banned`, weil zu diesem Zeitpunkt keine Sperre aktiv ist.
+Zu beachten: `ThrottleDecision::Allow { remaining: 0 }` bedeutet, dass **diese** Anfrage abzulehnen ist — das Kontingent ist verbraucht, nicht „noch ein Versuch übrig". Der Zweig heißt `Allow` und nicht `Banned`, weil zu diesem Zeitpunkt keine Sperre aktiv ist. `Unavailable` entsteht nur in `check` / `check_any`; `record_failure` gibt `ThrottleOutcome` zurück, das diesen Zweig bewusst nicht kennt — ein Speicherfehler wird dort zu `Err(StoreError)`.
 
 Ein `RequestContext` wird vollständig vom Aufrufer befüllt: Die Bibliothek fordert keine Geo-Datenbank an und validiert keine Signaturen, sondern vergleicht nur die übergebenen Werte mit der bei `bind` hinterlegten Basis.
+
+`subject` wird **nur von `bind` verwendet, `verify` ignoriert es vollständig** — die pro Anfrage geprüfte Identität stammt immer aus dem serverseitigen `SessionRecord` (die Fremdstandort-Historie aggregiert über `record.subject`), und die vom Aufrufer übergebene Angabe ist nicht vertrauenswürdig. `subject: ""` aus einer Middleware ist daher gültig (`bind` verlangt einen nicht-leeren Wert). Genau deshalb gehört **niemals** eine Nutzerkennung aus einem Request-Header hierher: Sie erreicht die Entscheidung heute nicht, aber ein künftiges Refactoring ist nicht daran gebunden.
 
 ## Modulpfade
 

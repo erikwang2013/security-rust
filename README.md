@@ -109,7 +109,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 | **jndi_injection** | `${jndi:ldap://`、`${lower:j}` 混淆、`${upper:j}` 混淆、`${::-j}` 空字符串混淆、`${env:}` 环境变量查找、`${sys:}` 系统属性 | Critical |
 | **ssi_injection** | `<!--#exec cmd=` 命令执行、`<!--#include file=` 文件包含、`<!--#echo var=` 变量输出、`<!--#fsize`/`<!--#flastmod` 文件信息 | High |
 | **graphql_injection** | `__schema`/`__type` 内省查询、深度嵌套 DoS（≥5层） | Medium |
-| **ssti** | Jinja2 `{{}}`、FreeMarker `${}`、ERB `<%=` `<%@`、Velocity `#set()`、Python MRO `__mro__`/`__subclasses__()` 沙箱逃逸 | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **定界符内的求值**（`{{7*7}}`、`${7*7}`、`{{config`、`${T(java.lang.Runtime)}`）、ERB `<%=` `<%@`、Velocity `#set()`、Python 逃逸链 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`；定界符本身不是信号，`${x}` 这类纯占位符不报 | Critical |
 | **format_string** | `%n`/`%hn`/`%1$n` 内存写入转换符、`%99999999d` 超宽宽度炸弹、`%x%x%x`/`%p%p%p` 连续读栈、`%08x.%08x` 带分隔泄露、连续 4 个以上 `%s` 逐栈读取；单个 `%s`/`%d` 属正常占位符不报 | Medium |
 
 ### 协议与请求攻击（11 个检测器）
@@ -122,7 +122,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 | **host_header** | 多 Host 头注入、`X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` 投毒、CRLF 携带 Host | High |
 | **request_smuggling** | 双重 `Transfer-Encoding` 头、`Content-Length: 0` 走私、`\r\n0\r\n` chunked 终止混淆 | High |
 | **open_redirect** | `//evil.com` 协议相对 URL、`javascript:`/`data:text/html` 伪协议跳转 | Medium |
-| **cors** | `Origin: null` 绕过、`Access-Control-Allow-Origin: *` + Credentials 组合 | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`、`Origin: null`（沙箱 iframe 与 CSWSH 的规范指示符）、`Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**。两者单独出现是公开 API 与静态资源的常态，不报 | Medium |
 | **websocket** | `Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）、`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`） | High |
 | **dns_rebinding** | Host 头为 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内网 IP、`localhost`、`::1`、`0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` 单字符大小写折叠、`${::-j}` 前缀折叠、`${env:…}ndi:` 等 lookup 展开后才拼出 JNDI（载荷不含 `jndi` 字面量）、`${${lower:…}}` 嵌套展开、`%24%7Blower%3Aj%7Dndi` URL 编码绕过 | Critical |
@@ -133,7 +133,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 | 检测器 | 覆盖模式 | 严重度 |
 |--------|---------|--------|
 | **deserialization** | PHP `O:数字:`/`C:数字:` 序列化对象、`a:数字:{` 数组、`unserialize()` 调用、`__wakeup`/`__destruct`/`__toString` 等魔术方法 | Critical |
-| **csv_injection** | 行首 `=`/`+`/`-`/`@` 公式字符、DDE 动态数据交换、`cmd\|` 命令管道、`@SUM()` 函数 | Medium |
+| **csv_injection** | 行首 `=`/`+`/`-`/`@` 公式字符（制表符与回车是**分隔符**，不是公式起始）、分隔符 `,`/`;`/`\t` 之后紧跟非空白的 `=`（TSV/CSV 第二个单元格里的公式）、DDE 动态数据交换、`cmd\|` 命令管道、`@SUM()` 函数 | Medium |
 | **mail_header** | `Bcc:`/`Cc:` 密送注入、`From:` 多重发件人、`MIME-Version:`/`Content-Type: multipart` MIME 头注入、`boundary=` 边界操纵 | Medium |
 | **jwt_attack** | `alg: none` 空算法绕过、`kid` 路径遍历注入、空签名段、空 payload 段 | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` 原型链污染、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` 属性劫持 | High |
@@ -203,7 +203,8 @@ let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default
 let key = "acct:u-1"; // key 由调用方构造并规范化，不要直接拿原始输入当 key
 let now = 1_700_000_000;
 
-match throttle.check(key, now) {
+// 真实请求有两个维度：IP 与账户。check_any 一次问完，按严格度合并
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
     // remaining 可写进 X-RateLimit-*；**remaining == 0 表示本请求应被拒绝**
     ThrottleDecision::Allow { remaining } => { /* 剩余额度 remaining */ }
     // now >= until 即视为已解封
@@ -212,7 +213,8 @@ match throttle.check(key, now) {
     ThrottleDecision::Unavailable => { /* 限流后端不可用 */ }
 }
 
-// 认证失败记一笔：达到 threshold 即封禁
+// 认证失败记一笔：达到 threshold 即封禁。返回 ThrottleOutcome（两态），
+// 存储故障走 Err —— 不必为一个永不执行的 Unavailable 臂写死代码
 let _ = throttle.record_failure(key, now);
 ```
 

@@ -95,7 +95,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **jndi_injection** | `${jndi:ldap://`, ofuscación `${lower:j}`, ofuscación `${upper:j}`, ofuscación de cadena vacía `${::-j}`, búsqueda de variables de entorno `${env:}`, propiedades de sistema `${sys:}` | Critical |
 | **ssi_injection** | Ejecución de comandos `<!--#exec cmd=`, inclusión de archivos `<!--#include file=`, salida de variables `<!--#echo var=`, información de archivos `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Consultas de introspección `__schema`/`__type`, DoS por anidamiento profundo (≥5 niveles) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, escape de sandbox Python MRO `__mro__`/`__subclasses__()` | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **evaluación dentro de los delimitadores** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, cadenas de escape de Python `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; los delimitadores por sí solos no son señal, un simple marcador como `${x}` no se reporta | Critical |
 | **format_string** | especificadores de escritura `%n` (también con modificadores de longitud), anchos desmesurados `%123456d`, especificadores `%x`/`%p`/`%s` repetidos (fuga de cadena de formato / corrupción de memoria) | Medium |
 
 ### Ataques de protocolo y peticiones (11 detectores)
@@ -108,7 +108,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **host_header** | Inyección de múltiples Host headers, envenenamiento `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`, Host con CRLF | High |
 | **request_smuggling** | Cabeceras `Transfer-Encoding` duplicadas, contrabando `Content-Length: 0`, ofuscación de terminación chunked `\r\n0\r\n` | High |
 | **open_redirect** | URL relativa a protocolo `//evil.com`, saltos por pseudo protocolos `javascript:`/`data:text/html` | Medium |
-| **cors** | Bypass `Origin: null`, combinación `Access-Control-Allow-Origin: *` + Credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (el indicador canónico de iframes en sandbox y CSWSH) y `Access-Control-Allow-Origin: *` **junto con** `Access-Control-Allow-Credentials: true`. Por separado ambos son normales en APIs públicas y recursos estáticos y no se reportan | Medium |
 | **websocket** | `Origin: null` junto con una actualización WebSocket (CSWSH), `ws://` hacia direcciones de loopback/privadas/link-local (incluido el endpoint de metadatos cloud `169.254.169.254`) | High |
 | **dns_rebinding** | Host header con IPs internas `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | ofuscación de lookup `${lower:j}`/`${upper:j}`, ofuscación con cadena vacía `${::-j}`, lookups anidados `${${...}:...}`, variante codificada en URL `%24%7b...%7d...ndi` | Critical |
@@ -119,7 +119,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
 | **deserialization** | Objetos serializados PHP `O:número:`/`C:número:`, arrays `a:número:{`, llamadas `unserialize()`, métodos mágicos `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Caracteres de fórmula `=`/`+`/`-`/`@` al inicio de línea, DDE (intercambio dinámico de datos), tubería de comandos `cmd\|`, función `@SUM()` | Medium |
+| **csv_injection** | Caracteres de fórmula al inicio de la celda `=`/`+`/`-`/`@` (el tabulador y el retorno de carro son **separadores**, no inicios de fórmula), un `=` inmediatamente después de un separador `,`/`;`/`\t`, DDE (intercambio dinámico de datos), tubería de comandos `cmd\|`, función `@SUM()` | Medium |
 | **mail_header** | Inyección en copia oculta `Bcc:`/`Cc:`, múltiples remitentes `From:`, inyección de cabeceras MIME `MIME-Version:`/`Content-Type: multipart`, manipulación de límite `boundary=` | Medium |
 | **jwt_attack** | Bypass con algoritmo vacío `alg: none`, inyección de path traversal en `kid`, segmento de firma vacío, segmento de payload vacío | High |
 | **prototype_pollution** | Contaminación de la cadena de prototipos `__proto__`/`constructor.prototype`, secuestro de propiedades `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
@@ -143,7 +143,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | Módulo | Tipo | Responsabilidad |
 |------|------|------|
 | `session` | `SessionGuard<S: SessionStore>` | Seguridad de sesión: secuestro de cliente, manipulación de datos, inicio de sesión desde una ubicación inusual, sesiones con token. Métodos `bind`/`verify`/`revoke`/`revoke_all`/`rotate`; `Decision { Allow, Challenge, Block }` + `SessionThreat`; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300); trait `SessionStore` + `MemoryStore` |
-| `throttle` | `Throttle<S: ThrottleStore>` | Limitación de tasa y bloqueo: ventana deslizante, bloqueo por umbral, bloqueo de cuenta. Métodos `check`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `throttle` | `Throttle<S: ThrottleStore>` | Limitación de tasa y bloqueo: ventana deslizante, bloqueo por umbral, bloqueo de cuenta. Métodos `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900); `record_failure` devuelve `ThrottleOutcome` (`Allow`/`Banned`), sin `Unavailable` |
 | `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Evaluación de riesgo: agrega señales sueltas de baja gravedad en una magnitud medible. `RiskLevel { None, Low, Medium, High, Critical }` |
 
 **La asimetría ante fallos es deliberada.** `SessionGuard` devuelve `Decision::Block` (`StoreUnavailable`) si el almacenamiento falla: fail-closed, nunca deja pasar. `Throttle` es la excepción consciente: la limitación de tasa es defensa en profundidad y no una barrera de autenticación principal, así que un fallo del backend devuelve `ThrottleDecision::Unavailable` y no `Banned` — bloquear a todos los usuarios sería un auto-DoS. La decisión queda en manos del llamador.

@@ -117,6 +117,22 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+### 状态标签的 `Display`
+
+除 `Severity` / `RiskLevel` 外，下列枚举也实现了 `Display`，日志里可直接插值，不必打印 `Debug` 形状：
+
+| 类型 | 输出 |
+|------|------|
+| `AttackCategory` | `injection` / `protocol` / `data` / `file` |
+| `Decision` | `ALLOW` / `CHALLENGE` / `BLOCK` |
+| `SessionThreat` | 人类可读描述（`token expired`、`fingerprint mismatch` …）；`ImpossibleTravel { kmh }` 带上数值：`impossible travel (11205 km/h)` |
+| `ThrottleDecision` | `ALLOW` / `BANNED` / `UNAVAILABLE` |
+| `ThrottleOutcome` | `ALLOW` / `BANNED` |
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## 模块路径
 
 | 模块 | 路径 | 公开项 | 检测器数 |
@@ -141,8 +157,8 @@ println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 | 类型 | 说明 |
 |------|------|
 | `SessionGuard<S: SessionStore>` | 会话闸门。`bind` / `verify` / `revoke` / `revoke_all` / `rotate` |
-| `RequestContext<'a>` | 一次请求的全部输入：`token`、`subject`、`fingerprint`、`location`、`coords`、`signature`、`at` |
-| `SessionVerdict` | 校验结论：`decision`、`severity`、`threats` |
+| `RequestContext<'a>` | 一次请求的全部输入：`token`、`subject`、`fingerprint`、`location`、`coords`、`signature`、`at`。`subject` **仅 `bind` 使用** |
+| `SessionVerdict` | 校验结论：`decision`、`severity: Option<Severity>`、`threats` |
 | `Decision` | `Allow` < `Challenge` < `Block`（声明顺序即严格度顺序） |
 | `SessionThreat` | 11 种威胁，各自映射固定的 `severity()` 与 `decision()` |
 | `SessionConfig` | 校准旋钮：`ttl_secs` = 3600、`impossible_travel_kmh` = 900.0、`timestamp_skew_secs` = 300 |
@@ -201,6 +217,8 @@ assert_eq!(verdict.decision, Decision::Block);
 ### 关键语义
 
 - **`Decision` 三档** — `Allow` 放行；`Challenge` 放行但要求二次验证（异地、时钟偏离、签名意外，这三项是「信号」而非「结论」）；`Block` 拒绝。多个威胁同时命中时取最严格者，`severity` 取最严重者。
+- **`severity` 是 `Option<Severity>`，放行为 `None`** — 没有威胁就是没有严重度，由类型说明。不要用某个低危值占位：占位值在日志里跟「发现了一条低危」长得一模一样，一条完全放行的正常请求会被读成有发现。
+- **`RequestContext.subject` 仅 `bind` 使用，`verify` 完全忽略它** — 每请求校验的身份一律取自服务端 `SessionRecord`（异地历史按 `record.subject` 聚合），**请求方提供的 subject 不可信**。因此中间件里传 `subject: ""` 是合法的（`bind` 才要求非空）。**绝不要**把请求头里的用户标识填进来当身份：现在它进不了判定，将来重构未必。
 - **fail-closed** — 存储后端故障时返回 `SessionThreat::StoreUnavailable` ⇒ `Block`，绝不放行。放行所有请求是一个可被攻击者主动触发的绕过。
 - **`verify` 返回 `SessionVerdict` 而非 `Result`** — 认证路径上「拒绝」是正常结果而非错误，强制调用方在类型层面处理每一种拒绝。只有 `bind` / `rotate` 会因调用方误用或后端故障返回 `Result`。
 - **只有放行才刷新活跃度** — 被拦的请求不会延长会话寿命。
@@ -217,8 +235,9 @@ assert_eq!(verdict.decision, Decision::Block);
 
 | 类型 | 说明 |
 |------|------|
-| `Throttle<S: ThrottleStore>` | 限流闸门。`check` / `record_failure` / `record_success` / `reset` / `purge_expired` |
-| `ThrottleDecision` | `Allow { remaining }` / `Banned { until }` / `Unavailable` |
+| `Throttle<S: ThrottleStore>` | 限流闸门。`check` / `check_any` / `record_failure` / `record_success` / `reset` / `purge_expired` |
+| `ThrottleDecision` | `check` / `check_any` 的结果：`Allow { remaining }` / `Banned { until }` / `Unavailable` |
+| `ThrottleOutcome` | `record_failure` 的结果：`Allow { remaining }` / `Banned { until }`。**没有 `Unavailable`** —— 存储故障走 `Err` |
 | `ThrottleConfig` | `threshold` = 5、`window_secs` = 60、`ban_secs` = 900 |
 | `ThrottleStore` | 存储抽象 trait，多实例部署实现它接 Redis 即可 |
 | `MemoryThrottleStore` | 内置内存后端 |
@@ -231,7 +250,9 @@ impl<S: ThrottleStore> Throttle<S> {
     pub fn config(&self) -> &ThrottleConfig;
 
     pub fn check(&self, key: &str, now: u64) -> ThrottleDecision;
-    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError>;
+    /// 同时检查多个维度（如 [ip_key, account_key]），返回最严格的结果。
+    pub fn check_any(&self, keys: &[&str], now: u64) -> ThrottleDecision;
+    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError>;
     pub fn record_success(&self, key: &str) -> Result<(), StoreError>;
     pub fn reset(&self, key: &str) -> Result<(), StoreError>;
     pub fn purge_expired(&self, now: u64) -> Result<usize, StoreError>;
@@ -241,7 +262,8 @@ impl<S: ThrottleStore> Throttle<S> {
 | 方法 | 用途 |
 |------|------|
 | `check` | 请求进入时调用：先查封禁，再算剩余额度。**不计入失败** |
-| `record_failure` | 认证失败时调用：达到 `threshold` 即封禁并返回 `Banned` |
+| `check_any` | 一次查多个维度（如 `[ip_key, account_key]`），返回最严格的结果。**不计入失败** |
+| `record_failure` | 认证失败时调用：达到 `threshold` 即封禁并返回 `Banned`；返回 `ThrottleOutcome` 而非 `ThrottleDecision` |
 | `record_success` | 认证成功时调用：**只清失败计数，保留封禁** |
 | `reset` | 人工解封 / 解限（清计数 + 清封禁） |
 | `purge_expired` | 清除已过期状态，返回清除条数 |
@@ -255,20 +277,26 @@ let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default
 let key = "acct:u-1"; // key 由调用方构造并规范化
 let now = 1_700_000_000;
 
-match throttle.check(key, now) {
+// 真实请求天然有两个维度：IP 与账户。一次问完，合并规则由库负责
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
     ThrottleDecision::Allow { remaining } => { /* 剩余额度 remaining */ }
     ThrottleDecision::Banned { until } => { /* 封禁中，until 解封 */ }
     ThrottleDecision::Unavailable => { /* 限流后端不可用 */ }
 }
 
-let _ = throttle.record_failure(key, now);
+// record_failure 只有两个可达状态：存储故障走 Err，不混在返回值里
+match throttle.record_failure(key, now) {
+    Ok(outcome) => println!("{outcome}"),
+    Err(e) => { /* 后端故障 */ }
+}
 ```
 
 ### 关键语义
 
 - **`Allow { remaining: 0 }` 表示本请求应被拒绝** — 额度已耗尽，不是「还能再试一次」。调用方必须据此拒绝，否则最后一次额度形同虚设。仍叫 `Allow` 是因为此刻并没有封禁在生效——例如 `ban_secs = 0` 的配置下，额度耗尽的 key 会一直落在这一支。
 - **`Banned { until }`** — `until` 是解封时刻（unix 秒），`now >= until` 即视为已解封。
-- **`Unavailable` 是唯一的 fail-open 例外，且是有意的** — 限流是纵深防御，不是主认证闸门。后端故障时返回 `Banned` 会把全体用户挡在门外（自我 DoS，且攻击者可能主动诱发），而放行只是暂时失去暴力破解防护——主认证闸门 `SessionGuard` 仍然在拦。调用方拿到该变体后自行选择（建议放行 + 告警）。`check` 只把 `Err` 映射到本变体，绝不映射到 `Banned`。
+- **`check_any` 的合并规则** — 任一 `Banned` → `Banned`（取**最晚**的 `until`）；否则任一 `Unavailable` → `Unavailable`；否则 `Allow` 取**最小** `remaining`。每个 key 各自独立查询，**不合并计数**：`ip:` 与 `acct:` 是两类互不干扰的桶，合并会让 NAT 后面的其他人替攻击者吃掉额度。`keys` 为空返回 `Allow { remaining: 0 }` 而非满额 —— 这个数字会写进 `X-RateLimit-*` 响应头，凭空报满额等于谎报额度。
+- **`Unavailable` 是唯一的 fail-open 例外，且是有意的** — 限流是纵深防御，不是主认证闸门。后端故障时返回 `Banned` 会把全体用户挡在门外（自我 DoS，且攻击者可能主动诱发），而放行只是暂时失去暴力破解防护——主认证闸门 `SessionGuard` 仍然在拦。调用方拿到该变体后自行选择（建议放行 + 告警）。**该变体只由 `check` / `check_any` 产生**：`check` 只把 `Err` 映射到它，绝不映射到 `Banned`；`record_failure` 返回的 `ThrottleOutcome` 压根没有这个变体（故障走 `Err`），调用方不必为一个永不执行的 `match` 臂写死代码。
 - **key 由调用方构造** — 约定形如 `"ip:1.2.3.4"` 或 `"acct:u-1"`；两类前缀不同，天然互不干扰，可同时启用。不要把用户输入原样当 key：攻击者每次换一个值就能把自己拆成无限多个桶；空 key 同理。调用方须先规范化（截断长度、统一大小写、限制字符集）并保证非空。
 - **`record_success` 只清计数、保留封禁** — 「凭据正确 ⇒ 顺手解封」只对 `acct:` 桶成立；对 `ip:` 这类共享桶，换成 `reset` 意味着桶里任意另一个用户认证成功就能替爆破者解封。代价是账户桶下被爆破牵连的用户即使立刻输对密码也要等满 `ban_secs`。
 - **`record_failure` 的计数与封禁不原子** — 两次独立的存储写入之间并发一次 `reset` 是可能的，结果是刚认证成功的用户又被封上（可用性问题，不构成绕过）。

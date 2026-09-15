@@ -88,7 +88,7 @@ Rust में लिखी गई हमले का पता लगाने
 `session` और `throttle` जानबूझकर `Detector` trait लागू नहीं करते, क्योंकि उनका इनपुट समग्र (composite) है — टोकन + फ़िंगरप्रिंट + स्थान + समय — जिसे `Detector::detect(&str)` व्यक्त नहीं कर सकता। नीचे दिए तीन मॉड्यूल स्ट्रिंग स्कैनिंग के ऊपर की परत बनाते हैं:
 
 - **`session`** — सत्र सुरक्षा: क्लाइंट हाइजैकिंग, डेटा छेड़छाड़, भिन्न स्थान से लॉगिन, टोकन सत्र। इसमें `SessionGuard<S: SessionStore>` है: `bind`/`verify`/`revoke`/`revoke_all`/`rotate`। डिफ़ॉल्ट: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300। स्टोर विफल होने पर परिणाम `Decision::Block` होता है (कारण `StoreUnavailable`) — यानी **fail-closed**, पास होने का कोई रास्ता नहीं।
-- **`throttle`** — दर सीमा और प्रतिबंध: स्लाइडिंग विंडो + थ्रेशोल्ड प्रतिबंध + खाता लॉक। इसमें `Throttle<S: ThrottleStore>` है: `check`/`record_failure`/`record_success`/`reset`/`purge_expired`, और यह `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }` लौटाता है। डिफ़ॉल्ट: threshold 5, window_secs 60, ban_secs 900। यह **जानबूझकर अपवाद** है: स्टोर विफल होने पर यह `Banned` नहीं, `Unavailable` लौटाता है — बैकएंड गड़बड़ी पर सभी उपयोगकर्ताओं को रोकना स्वयं पर DoS है, और निर्णय कॉलर पर छोड़ा जाता है।
+- **`throttle`** — दर सीमा और प्रतिबंध: स्लाइडिंग विंडो + थ्रेशोल्ड प्रतिबंध + खाता लॉक। इसमें `Throttle<S: ThrottleStore>` है: `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`, और यह `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }` लौटाता है। डिफ़ॉल्ट: threshold 5, window_secs 60, ban_secs 900। यह **जानबूझकर अपवाद** है: स्टोर विफल होने पर यह `Banned` नहीं, `Unavailable` लौटाता है — बैकएंड गड़बड़ी पर सभी उपयोगकर्ताओं को रोकना स्वयं पर DoS है, और निर्णय कॉलर पर छोड़ा जाता है। तथा `record_failure` `ThrottleOutcome` (`Allow`/`Banned`) लौटाता है, `Unavailable` रहित।
 - **`score`** — जोखिम स्कोरिंग: अलग-अलग कम-गंभीर संकेतों को मापने योग्य मान में समेटना, ताकि फ़ॉल्स-पॉज़िटिव सीमा को ट्यून किया जा सके। `RiskLevel { None, Low, Medium, High, Critical }`, `RiskAssessment`, और `Scanner::assess(&str) -> RiskAssessment`।
 
 `session` और `throttle` दोनों स्टोरेज के लिए trait एब्सट्रैक्शन का उपयोग करते हैं; कई इंस्टेंस में तैनाती के लिए यह trait लागू करके Redis से जोड़ा जा सकता है।
@@ -110,7 +110,7 @@ Rust में लिखी गई हमले का पता लगाने
 | **jndi_injection** | `${jndi:ldap://`, `${lower:j}` अस्पष्टता, `${upper:j}` अस्पष्टता, `${::-j}` खाली-स्ट्रिंग अस्पष्टता, `${env:}` एनवायरनमेंट वेरिएबल लुकअप, `${sys:}` सिस्टम प्रॉपर्टी | Critical |
 | **ssi_injection** | `<!--#exec cmd=` कमांड निष्पादन, `<!--#include file=` फ़ाइल इंक्लूज़न, `<!--#echo var=` वेरिएबल आउटपुट, `<!--#fsize`/`<!--#flastmod` फ़ाइल जानकारी | High |
 | **graphql_injection** | `__schema`/`__type` इंट्रोस्पेक्शन क्वेरी, डीप-नेस्टेड DoS (≥5 परतें) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python MRO `__mro__`/`__subclasses__()` सैंडबॉक्स एस्केप | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **डिलिमिटर के भीतर मूल्यांकन** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python एस्केप चेन `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; अकेले डिलिमिटर कोई संकेत नहीं हैं, इसलिए `${x}` जैसा सामान्य प्लेसहोल्डर रिपोर्ट नहीं होता | Critical |
 | **format_string** | मेमोरी-लेखन `%n` स्पेसिफ़ायर (`%n`/`%1$n`/`%hn`/`%ln`), बड़ी-चौड़ाई कन्वर्ज़न `%123456d`, मेमोरी लीक के लिए `%x`/`%p`/`%s` का सघन दोहराव | Medium |
 
 ### प्रोटोकॉल और अनुरोध हमले (11 डिटेक्टर)
@@ -123,7 +123,7 @@ Rust में लिखी गई हमले का पता लगाने
 | **host_header** | एकाधिक Host हेडर इंजेक्शन, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` पॉइज़निंग, CRLF के साथ Host | High |
 | **request_smuggling** | दोहरा `Transfer-Encoding` हेडर, `Content-Length: 0` स्मगलिंग, `\r\n0\r\n` chunked टर्मिनेशन अस्पष्टता | High |
 | **open_redirect** | `//evil.com` प्रोटोकॉल-रिलेटिव URL, `javascript:`/`data:text/html` छद्म-प्रोटोकॉल रीडायरेक्ट | Medium |
-| **cors** | `Origin: null` बाईपास, `Access-Control-Allow-Origin: *` + Credentials संयोजन | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (सैंडबॉक्स iframe और CSWSH का प्रामाणिक संकेतक), तथा `Access-Control-Allow-Origin: *` **के साथ** `Access-Control-Allow-Credentials: true`। अलग-अलग दोनों सार्वजनिक API और स्टैटिक संसाधनों के लिए सामान्य हैं, रिपोर्ट नहीं होते | Medium |
 | **websocket** | `Origin: null` और WebSocket अपग्रेड का साथ-साथ होना (CSWSH), `ws://` का लूपबैक/प्राइवेट/लिंक-लोकल पते पर इंगित होना (क्लाउड मेटाडेटा एंडपॉइंट `169.254.169.254` सहित) | High |
 | **dns_rebinding** | Host हेडर में `127.x`/`10.x`/`192.168.x`/`172.16-31.x` इंट्रानेट IP, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:j}` अस्पष्टता, `${::-j}` खाली-स्ट्रिंग अस्पष्टता, नेस्टेड `jndi` लुकअप, और URL-एन्कोडेड रूप `%24%7b...%3a...%7d...ndi` | Critical |
@@ -134,7 +134,7 @@ Rust में लिखी गई हमले का पता लगाने
 | डिटेक्टर | कवर किए गए पैटर्न | गंभीरता |
 |--------|---------|--------|
 | **deserialization** | PHP `O:अंक:`/`C:अंक:` सीरियलाइज़्ड ऑब्जेक्ट, `a:अंक:{` ऐरे, `unserialize()` कॉल, `__wakeup`/`__destruct`/`__toString` जैसी मैजिक मेथड | Critical |
-| **csv_injection** | पंक्ति की शुरुआत में `=`/`+`/`-`/`@` फ़ॉर्मूला कैरेक्टर, DDE डायनामिक डेटा एक्सचेंज, `cmd\|` कमांड पाइप, `@SUM()` फ़ंक्शन | Medium |
+| **csv_injection** | सेल के आरंभ में `=`/`+`/`-`/`@` फ़ॉर्मूला कैरेक्टर (टैब और कैरिज रिटर्न **विभाजक** हैं, फ़ॉर्मूला की शुरुआत नहीं), `,`/`;`/`\t` विभाजक के तुरंत बाद `=`, DDE डायनामिक डेटा एक्सचेंज, `cmd\|` कमांड पाइप, `@SUM()` फ़ंक्शन | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ब्लाइंड कार्बन कॉपी इंजेक्शन, `From:` एकाधिक प्रेषक, `MIME-Version:`/`Content-Type: multipart` MIME हेडर इंजेक्शन, `boundary=` बाउंड्री मैनिपुलेशन | Medium |
 | **jwt_attack** | `alg: none` खाली एल्गोरिदम बाईपास, `kid` पथ ट्रैवर्सल इंजेक्शन, खाली सिग्नेचर खंड, खाली payload खंड | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` प्रोटोटाइप चेन प्रदूषण, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` प्रॉपर्टी हाइजैकिंग | High |

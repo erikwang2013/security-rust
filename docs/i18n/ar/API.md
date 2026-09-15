@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+بقية وسوم الحالة تُنفّذ `Display` أيضًا وتُطبع بحروف كبيرة: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`)، و`SessionThreat` (مثل `impossible travel (11205 km/h)`)، و`AttackCategory` (بحروف صغيرة، مثل `injection`)، و`ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`)، و`ThrottleOutcome` (`ALLOW` / `BANNED`).
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## الوحدات ذات الحالة وتقييم المخاطر
 
 هذه الوحدات الثلاث متاحة مباشرة من جذر المكتبة. لا تنفّذ `session` و`throttle` الـ trait `Detector` لأن مدخلاتهما مركّبة. ولا تُضاف أي اعتمادية خارجية: التوكن والتوقيع (MAC) يوفّرهما المستدعي، وتحليل الموقع مسؤولية المستدعي أيضًا.
@@ -119,7 +125,8 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ```
 
 - حقول `RequestContext`: `token`، `subject`، `fingerprint`، `location`، `coords`، `signature`، `at`
-- حقول `SessionVerdict`: `decision`، `severity`، `threats`
+- حقول `SessionVerdict`: `decision`، و`severity: Option<Severity>` (تكون `None` عند السماح)، و`threats`
+- `subject` **يستخدمه `bind` فقط، و`verify` يتجاهله تمامًا**: هوية كل طلب تُؤخذ دائمًا من `SessionRecord` في الخادم (وسجل المواقع الغريبة يُجمَّع على `record.subject`)، وقيمة `subject` الواردة من الطالب غير موثوقة؛ ولذلك فإن `subject: ""` من الـ middleware قيمة صحيحة (`bind` هو الذي يطلب قيمة غير فارغة). ولهذا تحديدًا **لا يجوز إطلاقًا** وضع معرّف مستخدم مأخوذ من ترويسة الطلب هنا: فهو لا يصل إلى القرار اليوم، لكن إعادة الهيكلة مستقبلًا غير ملزمة بالحفاظ على ذلك.
 - `Decision`: `Allow` | `Challenge` | `Block`
 - عند تعذّر الوصول إلى المخزن تكون النتيجة `Decision::Block` (والسبب `StoreUnavailable`) — أي **fail-closed**، ولا يوجد مسار يسمح بالمرور
 - افتراضات `SessionConfig`: `ttl_secs` = 3600، و`impossible_travel_kmh` = 900.0، و`timestamp_skew_secs` = 300
@@ -128,7 +135,7 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ### `throttle` — الحد من المعدل
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
@@ -137,14 +144,18 @@ match throttle.check(key, now) {
     ThrottleDecision::Banned { until } => { /* محظور */ }
     ThrottleDecision::Unavailable => { /* تعذّر الوصول إلى المخزن */ }
 }
-throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+// فحص عدة أبعاد معًا (مثل IP + الحساب): النتيجة الأكثر صرامة هي المعتمدة
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
 throttle.purge_expired(now)?;        // Result<usize, StoreError>
 ```
 
 - افتراضات `ThrottleConfig`: `threshold` = 5، و`window_secs` = 60، و`ban_secs` = 900
-- **استثناء مقصود**: عند تعطّل المخزن تُعيد `Unavailable` وليس `Banned` — الحد من المعدل دفاع في العمق وليس البوابة الأساسية للمصادقة، ومنع جميع المستخدمين بسبب خلل في الخلفية هو حجب للذات (self-DoS)، وقرار التصرف متروك للمستدعي
+- `check_any(&[key, ...], now)` يدمج عدة أبعاد: أي `Banned` يفوز (بأبعد `until`)، وإلا `Unavailable`، وإلا `Allow` بأصغر `remaining`؛ وتمرير قائمة فارغة يعطي `Allow { remaining: 0 }`
+- `ThrottleOutcome` (`Allow { remaining }` | `Banned { until }`) هو ناتج `record_failure`؛ ولا يحوي `Unavailable` لأن فشل المخزن يعود هناك على شكل `Err(StoreError)`
+- **استثناء مقصود**: عند تعطّل المخزن تُعيد `check` / `check_any` قيمة `Unavailable` وليس `Banned` — الحد من المعدل دفاع في العمق وليس البوابة الأساسية للمصادقة، ومنع جميع المستخدمين بسبب خلل في الخلفية هو حجب للذات (self-DoS)، وقرار التصرف متروك للمستدعي
 - المخزن مجرّد عبر trait `ThrottleStore` والتنفيذ الجاهز `MemoryThrottleStore`
 
 ### `score` — تقييم المخاطر

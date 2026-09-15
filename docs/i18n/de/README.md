@@ -95,7 +95,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **jndi_injection** | `${jndi:ldap://`, Obfuskation `${lower:j}`, Obfuskation `${upper:j}`, Obfuskation mit leerem String `${::-j}`, Umgebungsvariablen-Nachschlag `${env:}`, Systemeigenschaften `${sys:}` | Critical |
 | **ssi_injection** | Befehlsausführung `<!--#exec cmd=`, Datei-Inklusion `<!--#include file=`, Variablen-Ausgabe `<!--#echo var=`, Datei-Informationen `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Introspection-Abfragen `__schema`/`__type`, tief verschachteltes DoS (≥5 Ebenen) | Medium |
-| **ssti** | Jinja2 `{{}}`, FreeMarker `${}`, ERB `<%=` `<%@`, Velocity `#set()`, Python-MRO-Sandbox-Escape `__mro__`/`__subclasses__()` | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **Auswertung innerhalb der Delimiter** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python-Escape-Ketten `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; die Delimiter allein sind kein Signal, ein reiner Platzhalter wie `${x}` wird nicht gemeldet | Critical |
 | **format_string** | `%n`-Schreibspezifizierer (auch mit Längenmodifikatoren), überlange Breitenangaben `%123456d`, gehäufte `%x`/`%p`/`%s`-Spezifizierer (Format-String-Leak / Speicherkorruption) | Medium |
 
 ### Protokoll- und Request-Angriffe (11 Detektoren)
@@ -108,7 +108,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **host_header** | Mehrfache Host-Header-Injection, Vergiftung über `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`, CRLF im Host-Header | High |
 | **request_smuggling** | Doppelte `Transfer-Encoding`-Header, Smuggling über `Content-Length: 0`, Obfuskation des Chunked-Abschlusses `\r\n0\r\n` | High |
 | **open_redirect** | Protokoll-relative URLs `//evil.com`, Sprünge über Pseudo-Protokolle `javascript:`/`data:text/html` | Medium |
-| **cors** | `Origin: null`-Bypass, Kombination `Access-Control-Allow-Origin: *` + Credentials | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (das kanonische Indiz für Sandbox-iframes und CSWSH) sowie `Access-Control-Allow-Origin: *` **zusammen mit** `Access-Control-Allow-Credentials: true`. Einzeln sind beide für öffentliche APIs und statische Assets normal und werden nicht gemeldet | Medium |
 | **websocket** | `Origin: null` zusammen mit einem WebSocket-Upgrade (CSWSH), `ws://` auf Loopback-/private/Link-Local-Adressen (inkl. Cloud-Metadaten-Endpunkt `169.254.169.254`) | High |
 | **dns_rebinding** | Host-Header mit internen IPs `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | Lookup-Obfuskation `${lower:j}`/`${upper:j}`, Obfuskation mit leerem String `${::-j}`, verschachtelte Lookups `${${...}:...}`, URL-kodierte Variante `%24%7b...%7d...ndi` | Critical |
@@ -119,7 +119,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
 | **deserialization** | PHP-serialisierte Objekte `O:Zahl:`/`C:Zahl:`, Arrays `a:Zahl:{`, `unserialize()`-Aufrufe, magische Methoden wie `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Formelzeichen `=`/`+`/`-`/`@` am Zeilenanfang, DDE (Dynamic Data Exchange), Befehls-Pipes `cmd\|`, `@SUM()`-Funktion | Medium |
+| **csv_injection** | Formelzeichen `=`/`+`/`-`/`@` am Zellenanfang (Tabulator und Wagenrücklauf sind **Trennzeichen**, kein Formelbeginn), ein `=` unmittelbar nach einem `,`/`;`/`\t`-Trennzeichen, DDE (Dynamic Data Exchange), Befehls-Pipes `cmd\|`, `@SUM()`-Funktion | Medium |
 | **mail_header** | Blindkopie-Injection `Bcc:`/`Cc:`, mehrfache Absender `From:`, MIME-Header-Injection `MIME-Version:`/`Content-Type: multipart`, Manipulation der `boundary=`-Grenze | Medium |
 | **jwt_attack** | Bypass mit leerem Algorithmus `alg: none`, Path-Traversal-Injection über `kid`, leeres Signatur-Segment, leeres Payload-Segment | High |
 | **prototype_pollution** | Prototype-Chain-Pollution `__proto__`/`constructor.prototype`, Property-Kapern über `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
@@ -143,7 +143,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | Modul | Typ | Aufgabe |
 |------|------|------|
 | `session` | `SessionGuard<S: SessionStore>` | Sitzungssicherheit: Client-Hijacking, Datenmanipulation, Anmeldung von ungewöhnlichem Ort, Token-Sitzungen. Methoden `bind`/`verify`/`revoke`/`revoke_all`/`rotate`; `Decision { Allow, Challenge, Block }` + `SessionThreat`; `SessionConfig` (`ttl_secs` 3600, `impossible_travel_kmh` 900.0, `timestamp_skew_secs` 300); Trait `SessionStore` + `MemoryStore` |
-| `throttle` | `Throttle<S: ThrottleStore>` | Ratenbegrenzung und Sperre: gleitendes Fenster, Schwellwert-Sperre, Kontosperrung. Methoden `check`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900) |
+| `throttle` | `Throttle<S: ThrottleStore>` | Ratenbegrenzung und Sperre: gleitendes Fenster, Schwellwert-Sperre, Kontosperrung. Methoden `check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`; `ThrottleDecision { Allow { remaining }, Banned { until }, Unavailable }`; `ThrottleConfig` (`threshold` 5, `window_secs` 60, `ban_secs` 900); `record_failure` gibt `ThrottleOutcome` (`Allow`/`Banned`) zurück — ohne `Unavailable` |
 | `score` | `RiskLevel`, `RiskAssessment`, `Scanner::assess()` | Risikobewertung: aggregiert einzelne Signale niedriger Schwere zu einer messbaren Größe. `RiskLevel { None, Low, Medium, High, Critical }` |
 
 **Asymmetrisches Fehlerverhalten ist Absicht.** `SessionGuard` gibt bei einem Speicherfehler `Decision::Block` (`StoreUnavailable`) zurück — fail-closed, es wird nie durchgelassen. `Throttle` ist die bewusste Ausnahme: Ratenbegrenzung ist Defense-in-Depth und kein primäres Authentifizierungs-Gate, deshalb liefert ein Backend-Ausfall `ThrottleDecision::Unavailable` statt `Banned` — alle Nutzer auszusperren wäre ein Selbst-DoS. Die Entscheidung liegt beim Aufrufer.

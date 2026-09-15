@@ -100,6 +100,12 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
+बाकी स्टेट लेबल भी `Display` लागू करते हैं और बड़े अक्षरों में छपते हैं: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (जैसे `impossible travel (11205 km/h)`), `AttackCategory` (छोटे अक्षरों में, जैसे `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`), `ThrottleOutcome` (`ALLOW` / `BANNED`)।
+
+```rust
+println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
+```
+
 ## स्टेटफुल मॉड्यूल और जोखिम स्कोरिंग
 
 ये तीनों मॉड्यूल सीधे क्रेट रूट से उपलब्ध हैं। `session` और `throttle` जानबूझकर `Detector` trait लागू नहीं करते, क्योंकि उनका इनपुट मिश्रित है। कोई नई बाहरी निर्भरता नहीं जुड़ती: token और signature (MAC) कॉलर देता है, और लोकेशन पार्स करना भी कॉलर की ज़िम्मेदारी है।
@@ -119,7 +125,8 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ```
 
 - `RequestContext` फ़ील्ड: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
-- `SessionVerdict` फ़ील्ड: `decision`, `severity`, `threats`
+- `SessionVerdict` फ़ील्ड: `decision`, `severity: Option<Severity>` (अनुमति पर `None`), `threats`
+- `subject` **केवल `bind` उपयोग करता है, `verify` इसे पूरी तरह अनदेखा करता है**: हर अनुरोध की पहचान हमेशा सर्वर के `SessionRecord` से आती है (भिन्न-स्थान इतिहास `record.subject` पर जुड़ता है), और अनुरोधकर्ता का भेजा `subject` अविश्वसनीय है; इसलिए मिडलवेयर से `subject: ""` भेजना वैध है (`bind` ही गैर-रिक्त मान माँगता है)। इसी कारण **कभी भी** अनुरोध हेडर से लिया गया उपयोगकर्ता-पहचानकर्ता यहाँ न रखें — वह आज निर्णय तक नहीं पहुँचता, पर भविष्य का रिफ़ैक्टर इसे बनाए रखने के लिए बाध्य नहीं है।
 - `Decision`: `Allow` | `Challenge` | `Block`
 - स्टोर उपलब्ध न होने पर परिणाम `Decision::Block` (कारण `StoreUnavailable`) होता है — यानी **fail-closed**, कोई रास्ता पार नहीं जाता
 - `SessionConfig` डिफ़ॉल्ट: `ttl_secs` = 3600, `impossible_travel_kmh` = 900.0, `timestamp_skew_secs` = 300
@@ -128,7 +135,7 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 ### `throttle` — दर सीमित करना
 
 ```rust
-use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
@@ -137,14 +144,18 @@ match throttle.check(key, now) {
     ThrottleDecision::Banned { until } => { /* प्रतिबंधित */ }
     ThrottleDecision::Unavailable => { /* स्टोर उपलब्ध नहीं */ }
 }
-throttle.record_failure(key, now)?;  // Result<ThrottleDecision, StoreError>
+// एक साथ कई आयाम जाँचें (जैसे IP + खाता): सबसे सख़्त नतीजा मान्य होता है
+let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
 throttle.purge_expired(now)?;        // Result<usize, StoreError>
 ```
 
 - `ThrottleConfig` डिफ़ॉल्ट: `threshold` = 5, `window_secs` = 60, `ban_secs` = 900
-- **जानबूझकर किया गया अपवाद**: स्टोर विफल होने पर यह `Banned` नहीं, `Unavailable` लौटाता है — दर सीमा defense-in-depth है, मुख्य प्रमाणीकरण द्वार नहीं; बैकएंड गड़बड़ी पर सभी उपयोगकर्ताओं को रोकना स्वयं के विरुद्ध DoS है, और निर्णय कॉलर पर छोड़ा गया है
+- `check_any(&[key, ...], now)` कई आयाम मिलाता है: कोई `Banned` हो तो वही जीतता है (सबसे दूर का `until`), वरना `Unavailable`, वरना सबसे छोटे `remaining` वाला `Allow`; खाली सूची पर `Allow { remaining: 0 }`
+- `ThrottleOutcome` (`Allow { remaining }` | `Banned { until }`) `record_failure` का परिणाम है; इसमें `Unavailable` नहीं है, क्योंकि स्टोर विफलता वहाँ `Err(StoreError)` बनकर लौटती है
+- **जानबूझकर किया गया अपवाद**: स्टोर विफल होने पर `check` / `check_any` `Banned` नहीं, `Unavailable` लौटाते हैं — दर सीमा defense-in-depth है, मुख्य प्रमाणीकरण द्वार नहीं; बैकएंड गड़बड़ी पर सभी उपयोगकर्ताओं को रोकना स्वयं के विरुद्ध DoS है, और निर्णय कॉलर पर छोड़ा गया है
 - स्टोर trait `ThrottleStore` से अमूर्त है, तैयार कार्यान्वयन `MemoryThrottleStore`
 
 ### `score` — जोखिम स्कोरिंग

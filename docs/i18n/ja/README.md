@@ -79,7 +79,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | データ | `src/data/` | 7 | PHP デシリアライゼーション、CSV インジェクション、スプレッドシート数式インジェクション、メールヘッダーインジェクション、JWT 攻撃、プロトタイプ汚染、ReDoS |
 | ファイル | `src/file/` | 3 | パストラバーサル、悪意あるファイルアップロード、機密データ漏洩 |
 | セッション | `src/session/` | — | `SessionGuard`、`RequestContext`、`SessionVerdict`、`SessionStore`/`MemoryStore` —— クライアントによる乗っ取り、データ改竄、不可能旅行、token 失効の判定 |
-| レート制限 | `src/throttle/` | — | `Throttle`、`ThrottleDecision`、`ThrottleStore`/`MemoryThrottleStore` —— スライディングウィンドウ、閾値での封鎖、アカウントロック |
+| レート制限 | `src/throttle/` | — | `Throttle`（`check`/`check_any`/`record_failure`/`record_success`/`reset`/`purge_expired`）、`ThrottleDecision`、`ThrottleOutcome`、`ThrottleStore`/`MemoryThrottleStore` —— スライディングウィンドウ、閾値での封鎖、アカウントロック |
 | スコアリング | `src/score.rs` | — | `RiskLevel`、`RiskAssessment`、`Scanner::assess()` —— 低リスク信号を集約し、観測可能なリスク値にする |
 
 ### 検出結果の構造
@@ -103,7 +103,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **jndi_injection** | `${jndi:ldap://`、`${lower:j}` 難読化、`${upper:j}` 難読化、`${::-j}` 空文字列難読化、`${env:}` 環境変数ルックアップ、`${sys:}` システムプロパティ | Critical |
 | **ssi_injection** | `<!--#exec cmd=` コマンド実行、`<!--#include file=` ファイルインクルード、`<!--#echo var=` 変数出力、`<!--#fsize`/`<!--#flastmod` ファイル情報 | High |
 | **graphql_injection** | `__schema`/`__type` イントロスペクションクエリ、深いネストによる DoS（5 層以上） | Medium |
-| **ssti** | Jinja2 `{{}}`、FreeMarker `${}`、ERB `<%=` `<%@`、Velocity `#set()`、Python MRO `__mro__`/`__subclasses__()` サンドボックスエスケープ | Critical |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` の**デリミタ内での評価**（`{{7*7}}`、`${7*7}`、`{{config`、`${T(java.lang.Runtime)}`）、ERB `<%=` `<%@`、Velocity `#set()`、Python エスケープチェーン `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`。デリミタ自体は信号ではなく、`${x}` のような単なるプレースホルダーは報告しない | Critical |
 | **format_string** | `%n`/`%hn`/`%lln` メモリ書き込み変換子、`%99999999d` 幅爆弾、連続 `%x%x%x`・区切り付き `%08x.%08x.%08x.%08x` のスタック読み出し、連続 `%s` | Medium |
 
 ### プロトコル・リクエスト攻撃（11 検出器）
@@ -116,7 +116,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **host_header** | 複数 Host ヘッダーインジェクション、`X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` ポイズニング、CRLF による Host 運搬 | High |
 | **request_smuggling** | 二重 `Transfer-Encoding` ヘッダー、`Content-Length: 0` スモグリング、`\r\n0\r\n` chunked 終端難読化 | High |
 | **open_redirect** | `//evil.com` プロトコル相対 URL、`javascript:`/`data:text/html` 疑似プロトコルによるリダイレクト | Medium |
-| **cors** | `Origin: null` バイパス、`Access-Control-Allow-Origin: *` + Credentials の組み合わせ | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`、`Origin: null`（サンドボックス iframe と CSWSH の正規の指標）、および `Access-Control-Allow-Origin: *` と `Access-Control-Allow-Credentials: true` の**同時出現**。単独で現れる分には公開 API や静的アセットでは正常であり報告しない | Medium |
 | **websocket** | `Origin: null` と WebSocket アップグレードの同時出現（CSWSH）、`ws://` がループバック / プライベート / リンクローカルアドレスを指す場合（クラウドメタデータエンドポイント `169.254.169.254` を含む） | High |
 | **dns_rebinding** | Host ヘッダーが `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内部 IP、`localhost`、`::1`、`0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` の大小文字折り畳み、`${::-j}` のプレフィックス折り畳み、lookup 展開後に `ndi:` が現れる混淆、`${${...}}` の入れ子展開、URL エンコード形態 `%24%7b...%7d` | Critical |
@@ -127,7 +127,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
 | **deserialization** | PHP `O:数字:`/`C:数字:` シリアライズオブジェクト、`a:数字:{` 配列、`unserialize()` 呼び出し、`__wakeup`/`__destruct`/`__toString` などのマジックメソッド | Critical |
-| **csv_injection** | 行頭 `=`/`+`/`-`/`@` 数式文字、DDE 動的データ交換、`cmd\|` コマンドパイプ、`@SUM()` 関数 | Medium |
+| **csv_injection** | セル先頭の `=`/`+`/`-`/`@` 数式文字（タブと復帰は**区切り文字**であり数式の開始ではない）、区切り文字 `,`/`;`/`\t` の直後に続く `=`、DDE 動的データ交換、`cmd\|` コマンドパイプ、`@SUM()` 関数 | Medium |
 | **mail_header** | `Bcc:`/`Cc:` ブラインドカーボンコピーインジェクション、`From:` 多重送信者、`MIME-Version:`/`Content-Type: multipart` MIME ヘッダーインジェクション、`boundary=` バウンダリー操作 | Medium |
 | **jwt_attack** | `alg: none` 空アルゴリズムバイパス、`kid` パストラバーサルインジェクション、空署名セグメント、空 payload セグメント | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` プロトタイプチェーン汚染、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` プロパティハイジャック | High |
