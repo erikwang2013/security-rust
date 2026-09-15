@@ -90,8 +90,8 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **sql_injection** | `UNION SELECT`, verzögerte Injection mit `sleep()`/`benchmark()`/`pg_sleep()`, Enumeration von `information_schema`, Stored Procedures `exec sp_`/`xp_`, Boolean-Blind-Injection-Muster `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Backtick-Befehle, `$()`-Subshells, Verkettung über Pipe-Symbole, Reverse Shell über `/dev/tcp`, PHP-Funktionen `passthru()`/`shell_exec()`/`system()`, Aufrufe von `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | MongoDB-Operatoren `$ne`/`$gt`/`$regex`/`$where`, `$or`-Injection, Authentifizierungs-Bypass `{"$gt": ""}` | Critical |
-| **ldap_injection** | Filter-Operatoren `(&` `(|` `(!`, Attribut-Enumeration `*(cn=`, `objectClass`/`uid`-Injection | High |
-| **xpath_injection** | Boolean-Bypass `' or '1'='1`, Funktions-Injection `' or true()`, Knoten-Traversierung `'] | '` | High |
+| **ldap_injection** | Filter-Operatoren `(&` `(\|` `(!`, Attribut-Enumeration `*(cn=`, `objectClass`/`uid`-Injection | High |
+| **xpath_injection** | Boolean-Bypass `' or '1'='1`, Funktions-Injection `' or true()`, Knoten-Traversierung `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, Obfuskation `${lower:j}`, Obfuskation `${upper:j}`, Obfuskation mit leerem String `${::-j}`, Umgebungsvariablen-Nachschlag `${env:}`, Systemeigenschaften `${sys:}` | Critical |
 | **ssi_injection** | Befehlsausführung `<!--#exec cmd=`, Datei-Inklusion `<!--#include file=`, Variablen-Ausgabe `<!--#echo var=`, Datei-Informationen `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Introspection-Abfragen `__schema`/`__type`, tief verschachteltes DoS (≥5 Ebenen) | Medium |
@@ -119,12 +119,12 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
 | **deserialization** | PHP-serialisierte Objekte `O:Zahl:`/`C:Zahl:`, Arrays `a:Zahl:{`, `unserialize()`-Aufrufe, magische Methoden wie `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Formelzeichen `=`/`+`/`-`/`@` am Zeilenanfang, DDE (Dynamic Data Exchange), Befehls-Pipes `cmd|`, `@SUM()`-Funktion | Medium |
+| **csv_injection** | Formelzeichen `=`/`+`/`-`/`@` am Zeilenanfang, DDE (Dynamic Data Exchange), Befehls-Pipes `cmd\|`, `@SUM()`-Funktion | Medium |
 | **mail_header** | Blindkopie-Injection `Bcc:`/`Cc:`, mehrfache Absender `From:`, MIME-Header-Injection `MIME-Version:`/`Content-Type: multipart`, Manipulation der `boundary=`-Grenze | Medium |
 | **jwt_attack** | Bypass mit leerem Algorithmus `alg: none`, Path-Traversal-Injection über `kid`, leeres Signatur-Segment, leeres Payload-Segment | High |
 | **prototype_pollution** | Prototype-Chain-Pollution `__proto__`/`constructor.prototype`, Property-Kapern über `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
-| **formula_injection** | Formelzeichen am Feldanfang mit Befehls-Pipe `=cmd|`, gefährliche Tabellenfunktionen `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, Datenabfluss über `|` + Zellbezug `A0`, `DDE(`-Aufrufe, `@`-Funktionen | High |
-| **redos** | Katastrophales Backtracking: verschachtelte Quantifizierer `(a+)+`/`(a{2,})+`, überlappende Alternativen `(a|ab)+`, Quantifizierer über `\w`/`\d`/`.`-Gruppen | Medium |
+| **formula_injection** | Formelzeichen am Feldanfang mit Befehls-Pipe `=cmd\|`, gefährliche Tabellenfunktionen `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, Datenabfluss über `\|` + Zellbezug `A0`, `DDE(`-Aufrufe, `@`-Funktionen | High |
+| **redos** | Katastrophales Backtracking: verschachtelte Quantifizierer `(a+)+`/`(a{2,})+`, überlappende Alternativen `(a\|ab)+`, Quantifizierer über `\w`/`\d`/`.`-Gruppen | Medium |
 
 ### Dateien und sensible Daten (3 Detektoren)
 

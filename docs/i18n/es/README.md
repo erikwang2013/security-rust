@@ -90,8 +90,8 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **sql_injection** | `UNION SELECT`, inyección de retardos `sleep()`/`benchmark()`/`pg_sleep()`, enumeración `information_schema`, procedimientos almacenados `exec sp_`/`xp_`, patrón de ceguera booleana `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Comandos entre comillas invertidas, subcomandos `$()`, ejecución encadenada con tuberías, shell inversa `/dev/tcp`, funciones PHP `passthru()`/`shell_exec()`/`system()`, invocación de `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Operadores de MongoDB `$ne`/`$gt`/`$regex`/`$where`, inyección `$or`, bypass de autenticación `{"$gt": ""}` | Critical |
-| **ldap_injection** | Operadores de filtro `(&` `(|` `(!`, enumeración de atributos `*(cn=`, inyección de `objectClass`/`uid` | High |
-| **xpath_injection** | Bypass booleano `' or '1'='1`, inyección de función `' or true()`, recorrido de nodos `'] | '` | High |
+| **ldap_injection** | Operadores de filtro `(&` `(\|` `(!`, enumeración de atributos `*(cn=`, inyección de `objectClass`/`uid` | High |
+| **xpath_injection** | Bypass booleano `' or '1'='1`, inyección de función `' or true()`, recorrido de nodos `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, ofuscación `${lower:j}`, ofuscación `${upper:j}`, ofuscación de cadena vacía `${::-j}`, búsqueda de variables de entorno `${env:}`, propiedades de sistema `${sys:}` | Critical |
 | **ssi_injection** | Ejecución de comandos `<!--#exec cmd=`, inclusión de archivos `<!--#include file=`, salida de variables `<!--#echo var=`, información de archivos `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Consultas de introspección `__schema`/`__type`, DoS por anidamiento profundo (≥5 niveles) | Medium |
@@ -119,12 +119,12 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
 | **deserialization** | Objetos serializados PHP `O:número:`/`C:número:`, arrays `a:número:{`, llamadas `unserialize()`, métodos mágicos `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Caracteres de fórmula `=`/`+`/`-`/`@` al inicio de línea, DDE (intercambio dinámico de datos), tubería de comandos `cmd|`, función `@SUM()` | Medium |
+| **csv_injection** | Caracteres de fórmula `=`/`+`/`-`/`@` al inicio de línea, DDE (intercambio dinámico de datos), tubería de comandos `cmd\|`, función `@SUM()` | Medium |
 | **mail_header** | Inyección en copia oculta `Bcc:`/`Cc:`, múltiples remitentes `From:`, inyección de cabeceras MIME `MIME-Version:`/`Content-Type: multipart`, manipulación de límite `boundary=` | Medium |
 | **jwt_attack** | Bypass con algoritmo vacío `alg: none`, inyección de path traversal en `kid`, segmento de firma vacío, segmento de payload vacío | High |
 | **prototype_pollution** | Contaminación de la cadena de prototipos `__proto__`/`constructor.prototype`, secuestro de propiedades `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
-| **formula_injection** | caracteres de fórmula al inicio del campo con tubería de comando `=cmd|`, funciones de hoja de cálculo peligrosas `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltración vía `|` + referencia de celda `A0`, llamadas `DDE(`, funciones `@` | High |
-| **redos** | retroceso catastrófico: cuantificadores anidados `(a+)+`/`(a{2,})+`, alternativas solapadas `(a|ab)+`, cuantificador sobre un grupo `\w`/`\d`/`.` | Medium |
+| **formula_injection** | caracteres de fórmula al inicio del campo con tubería de comando `=cmd\|`, funciones de hoja de cálculo peligrosas `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltración vía `\|` + referencia de celda `A0`, llamadas `DDE(`, funciones `@` | High |
+| **redos** | retroceso catastrófico: cuantificadores anidados `(a+)+`/`(a{2,})+`, alternativas solapadas `(a\|ab)+`, cuantificador sobre un grupo `\w`/`\d`/`.` | Medium |
 
 ### Archivos y datos sensibles (3 detectores)
 

@@ -90,8 +90,8 @@
 | **sql_injection** | `UNION SELECT`, инъекции с задержкой `sleep()`/`benchmark()`/`pg_sleep()`, перечисление `information_schema`, хранимые процедуры `exec sp_`/`xp_`, паттерны слепых boolean-инъекций `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Команды в обратных кавычках, подкоманды `$()`, конвейерное исполнение через pipe, reverse shell `/dev/tcp`, PHP-функции `passthru()`/`shell_exec()`/`system()`, вызовы `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Операторы MongoDB `$ne`/`$gt`/`$regex`/`$where`, инъекция `$or`, обход аутентификации `{"$gt": ""}` | Critical |
-| **ldap_injection** | Операторы фильтров `(&` `(|` `(!`, перечисление атрибутов `*(cn=`, инъекции `objectClass`/`uid` | High |
-| **xpath_injection** | Обход boolean `' or '1'='1`, инъекция функции `' or true()`, обход узлов `'] | '` | High |
+| **ldap_injection** | Операторы фильтров `(&` `(\|` `(!`, перечисление атрибутов `*(cn=`, инъекции `objectClass`/`uid` | High |
+| **xpath_injection** | Обход boolean `' or '1'='1`, инъекция функции `' or true()`, обход узлов `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, обфускация `${lower:j}`, обфускация `${upper:j}`, обфускация пустой строкой `${::-j}`, поиск переменных окружения `${env:}`, системные свойства `${sys:}` | Critical |
 | **ssi_injection** | Выполнение команд `<!--#exec cmd=`, включение файлов `<!--#include file=`, вывод переменных `<!--#echo var=`, информация о файлах `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Интроспекционные запросы `__schema`/`__type`, DoS через глубокую вложенность (≥5 уровней) | Medium |
@@ -119,12 +119,12 @@
 | Детектор | Покрываемые паттерны | Серьёзность |
 |----------|----------------------|-------------|
 | **deserialization** | PHP-объекты сериализации `O:число:`/`C:число:`, массивы `a:число:{`, вызовы `unserialize()`, магические методы `__wakeup`/`__destruct`/`__toString` и др. | Critical |
-| **csv_injection** | Символы формул `=`/`+`/`-`/`@` в начале строки, DDE (динамический обмен данными), командный конвейер `cmd|`, функция `@SUM()` | Medium |
+| **csv_injection** | Символы формул `=`/`+`/`-`/`@` в начале строки, DDE (динамический обмен данными), командный конвейер `cmd\|`, функция `@SUM()` | Medium |
 | **mail_header** | Инъекция скрытой копии `Bcc:`/`Cc:`, множественные отправители `From:`, инъекция MIME-заголовков `MIME-Version:`/`Content-Type: multipart`, манипуляция границей `boundary=` | Medium |
 | **jwt_attack** | Обход через пустой алгоритм `alg: none`, обход пути через `kid`, пустой сегмент подписи, пустой сегмент payload | High |
 | **prototype_pollution** | Загрязнение цепочки прототипов `__proto__`/`constructor.prototype`, перехват свойств `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
-| **formula_injection** | символы формул в начале поля с командным конвейером `=cmd|`, опасные функции таблиц `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, утечка через `|` + ссылку на ячейку `A0`, вызовы `DDE(`, функции `@` | High |
-| **redos** | катастрофический бэктрекинг: вложенные квантификаторы `(a+)+`/`(a{2,})+`, перекрывающиеся альтернативы `(a|ab)+`, квантификатор над группой с `\w`/`\d`/`.` | Medium |
+| **formula_injection** | символы формул в начале поля с командным конвейером `=cmd\|`, опасные функции таблиц `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, утечка через `\|` + ссылку на ячейку `A0`, вызовы `DDE(`, функции `@` | High |
+| **redos** | катастрофический бэктрекинг: вложенные квантификаторы `(a+)+`/`(a{2,})+`, перекрывающиеся альтернативы `(a\|ab)+`, квантификатор над группой с `\w`/`\d`/`.` | Medium |
 
 ### Файлы и чувствительные данные (3 детектора)
 

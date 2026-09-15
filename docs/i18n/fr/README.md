@@ -90,8 +90,8 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **sql_injection** | `UNION SELECT`, injections à retard `sleep()`/`benchmark()`/`pg_sleep()`, énumération `information_schema`, procédures stockées `exec sp_`/`xp_`, motif d'aveugle booléen `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Commandes par backquote, sous-commandes `$()`, enchaînement par pipe, shell rebondi `/dev/tcp`, fonctions PHP `passthru()`/`shell_exec()`/`system()`, appels `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Opérateurs MongoDB `$ne`/`$gt`/`$regex`/`$where`, injection `$or`, contournement d'authentification `{"$gt": ""}` | Critical |
-| **ldap_injection** | Opérateurs de filtre `(&` `(|` `(!`, énumération d'attributs `*(cn=`, injection `objectClass`/`uid` | High |
-| **xpath_injection** | Contournement booléen `' or '1'='1`, injection de fonction `' or true()`, parcours de nœuds `'] | '` | High |
+| **ldap_injection** | Opérateurs de filtre `(&` `(\|` `(!`, énumération d'attributs `*(cn=`, injection `objectClass`/`uid` | High |
+| **xpath_injection** | Contournement booléen `' or '1'='1`, injection de fonction `' or true()`, parcours de nœuds `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, obfuscation `${lower:j}`, obfuscation `${upper:j}`, obfuscation par chaîne vide `${::-j}`, recherche de variable d'environnement `${env:}`, propriétés système `${sys:}` | Critical |
 | **ssi_injection** | Exécution de commande `<!--#exec cmd=`, inclusion de fichier `<!--#include file=`, sortie de variable `<!--#echo var=`, informations de fichier `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Requêtes d'introspection `__schema`/`__type`, DoS par imbrication profonde (≥ 5 niveaux) | Medium |
@@ -119,12 +119,12 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | Détecteur | Motifs couverts | Sévérité |
 |--------|---------|--------|
 | **deserialization** | Objets sérialisés PHP `O:chiffre:`/`C:chiffre:`, tableaux `a:chiffre:{`, appels `unserialize()`, méthodes magiques `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Caractères de formule en début de ligne `=`/`+`/`-`/`@`, échange de données dynamique DDE, pipe de commande `cmd|`, fonction `@SUM()` | Medium |
+| **csv_injection** | Caractères de formule en début de ligne `=`/`+`/`-`/`@`, échange de données dynamique DDE, pipe de commande `cmd\|`, fonction `@SUM()` | Medium |
 | **mail_header** | Injection en copie cachée `Bcc:`/`Cc:`, expéditeurs multiples `From:`, injection d'en-têtes MIME `MIME-Version:`/`Content-Type: multipart`, manipulation de limite `boundary=` | Medium |
 | **jwt_attack** | Contournement par algorithme vide `alg: none`, injection de traversée de chemins `kid`, segment de signature vide, segment de payload vide | High |
 | **prototype_pollution** | Pollution de chaîne de prototypes `__proto__`/`constructor.prototype`, détournement de propriétés `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
-| **formula_injection** | caractères de formule en début de champ avec pipe de commande `=cmd|`, fonctions de tableur dangereuses `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltration via `|` + référence de cellule `A0`, appels `DDE(`, fonctions `@` | High |
-| **redos** | retour arrière catastrophique : quantificateurs imbriqués `(a+)+`/`(a{2,})+`, alternatives qui se chevauchent `(a|ab)+`, quantificateur sur un groupe `\w`/`\d`/`.` | Medium |
+| **formula_injection** | caractères de formule en début de champ avec pipe de commande `=cmd\|`, fonctions de tableur dangereuses `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltration via `\|` + référence de cellule `A0`, appels `DDE(`, fonctions `@` | High |
+| **redos** | retour arrière catastrophique : quantificateurs imbriqués `(a+)+`/`(a{2,})+`, alternatives qui se chevauchent `(a\|ab)+`, quantificateur sur un groupe `\w`/`\d`/`.` | Medium |
 
 ### Fichiers et données sensibles (3 détecteurs)
 

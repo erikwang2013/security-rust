@@ -90,8 +90,8 @@ Esta biblioteca se posiciona como um **scanner de entrada puro** — recebe stri
 | **sql_injection** | `UNION SELECT`, injeção de atraso `sleep()`/`benchmark()`/`pg_sleep()`, enumeração `information_schema`, stored procedures `exec sp_`/`xp_`, padrões de blind boolean `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
 | **command_injection** | Comandos com crase, subcomandos `$()`, execução em cadeia com pipe, reverse shell `/dev/tcp`, funções PHP `passthru()`/`shell_exec()`/`system()`, chamadas `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Operadores MongoDB `$ne`/`$gt`/`$regex`/`$where`, injeção `$or`, bypass de autenticação `{"$gt": ""}` | Critical |
-| **ldap_injection** | Operadores de filtro `(&` `(|` `(!`, enumeração de atributos `*(cn=`, injeção `objectClass`/`uid` | High |
-| **xpath_injection** | Bypass booleano `' or '1'='1`, injeção de função `' or true()`, travessia de nós `'] | '` | High |
+| **ldap_injection** | Operadores de filtro `(&` `(\|` `(!`, enumeração de atributos `*(cn=`, injeção `objectClass`/`uid` | High |
+| **xpath_injection** | Bypass booleano `' or '1'='1`, injeção de função `' or true()`, travessia de nós `'] \| '` | High |
 | **jndi_injection** | `${jndi:ldap://`, ofuscação `${lower:j}`, ofuscação `${upper:j}`, ofuscação de string vazia `${::-j}`, consulta de variáveis de ambiente `${env:}`, propriedades de sistema `${sys:}` | Critical |
 | **ssi_injection** | Execução de comandos `<!--#exec cmd=`, inclusão de arquivos `<!--#include file=`, saída de variáveis `<!--#echo var=`, informações de arquivo `<!--#fsize`/`<!--#flastmod` | High |
 | **graphql_injection** | Consultas de introspecção `__schema`/`__type`, DoS de aninhamento profundo (≥5 níveis) | Medium |
@@ -119,12 +119,12 @@ Esta biblioteca se posiciona como um **scanner de entrada puro** — recebe stri
 | Detector | Padrões cobertos | Severidade |
 |--------|---------|--------|
 | **deserialization** | Objetos serializados PHP `O:número:`/`C:número:`, arrays `a:número:{`, chamadas `unserialize()`, métodos mágicos `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Caracteres de fórmula no início da linha `=`/`+`/`-`/`@`, troca dinâmica de dados DDE, pipe de comandos `cmd|`, funções `@SUM()` | Medium |
+| **csv_injection** | Caracteres de fórmula no início da linha `=`/`+`/`-`/`@`, troca dinâmica de dados DDE, pipe de comandos `cmd\|`, funções `@SUM()` | Medium |
 | **mail_header** | Injeção Bcc:`/`Cc:` cópia oculta, múltiplos remetentes `From:`, injeção de cabeçalhos MIME `MIME-Version:`/`Content-Type: multipart`, manipulação de limite `boundary=` | Medium |
 | **jwt_attack** | Bypass de algoritmo vazio `alg: none`, injeção de path traversal `kid`, segmento de assinatura vazio, segmento de payload vazio | High |
 | **prototype_pollution** | Poluição da cadeia de protótipos `__proto__`/`constructor.prototype`, sequestro de propriedades `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
-| **formula_injection** | caracteres de fórmula no início do campo com pipe de comando `=cmd|`, funções de planilha perigosas `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltração via `|` + referência de célula `A0`, chamadas `DDE(`, funções `@` | High |
-| **redos** | backtracking catastrófico: quantificadores aninhados `(a+)+`/`(a{2,})+`, alternativas sobrepostas `(a|ab)+`, quantificador sobre grupo com `\w`/`\d`/`.` | Medium |
+| **formula_injection** | caracteres de fórmula no início do campo com pipe de comando `=cmd\|`, funções de planilha perigosas `HYPERLINK`/`IMPORTXML`/`IMPORTDATA`/`IMPORTRANGE`/`WEBSERVICE`/`RTD`/`EXEC`, exfiltração via `\|` + referência de célula `A0`, chamadas `DDE(`, funções `@` | High |
+| **redos** | backtracking catastrófico: quantificadores aninhados `(a+)+`/`(a{2,})+`, alternativas sobrepostas `(a\|ab)+`, quantificador sobre grupo com `\w`/`\d`/`.` | Medium |
 
 ### Arquivos e Dados Sensíveis (3 detectores)
 
