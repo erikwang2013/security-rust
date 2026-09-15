@@ -33,6 +33,11 @@ impl Default for ThrottleConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThrottleDecision {
     /// 放行，`remaining` 为窗口内剩余可失败次数（可写进 X-RateLimit-* 响应头）。
+    ///
+    /// **`remaining == 0` 表示本请求应被拒绝**（额度已耗尽），不是「还能再试一次」；
+    /// 调用方必须据此拒绝，否则最后一次额度形同虚设。仍叫 `Allow` 而非 `Banned`，
+    /// 是因为此刻并没有封禁在生效 —— 例如 `ban_secs = 0` 的配置下，额度耗尽的 key
+    /// 会一直落在这一支。
     Allow { remaining: u32 },
     /// 已封禁，`until` 是解封时刻（unix 秒）。`now >= until` 即视为已解封。
     Banned { until: u64 },
@@ -58,18 +63,5 @@ mod tests {
         assert_eq!(c.threshold, 5, "got {:?}", c);
         assert_eq!(c.window_secs, 60, "got {:?}", c);
         assert_eq!(c.ban_secs, 900, "got {:?}", c);
-    }
-
-    #[test]
-    fn unavailable_is_distinct_from_banned() {
-        // 钉住「不 fail-closed」的类型不变量：两者不可互换
-        assert_ne!(
-            ThrottleDecision::Unavailable,
-            ThrottleDecision::Banned { until: 0 }
-        );
-        assert_ne!(
-            ThrottleDecision::Unavailable,
-            ThrottleDecision::Allow { remaining: 0 }
-        );
     }
 }

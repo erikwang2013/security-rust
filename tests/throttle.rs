@@ -40,6 +40,9 @@ impl ThrottleStore for BrokenThrottleStore {
     fn ban(&self, _k: &str, _until: u64) -> Result<(), StoreError> {
         Err(StoreError::Unavailable)
     }
+    fn clear_failures(&self, _k: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
     fn reset(&self, _k: &str) -> Result<(), StoreError> {
         Err(StoreError::Unavailable)
     }
@@ -47,6 +50,66 @@ impl ThrottleStore for BrokenThrottleStore {
         Err(StoreError::Unavailable)
     }
 }
+
+/// 读路径可注入的后端：`banned` **原样返回**（不替 `check` 过滤），`count` 可设成故障。
+#[derive(Debug)]
+struct ReadFaultyStore {
+    banned: Option<u64>,
+    count: Result<u32, StoreError>,
+}
+
+impl ThrottleStore for ReadFaultyStore {
+    fn record_failure(&self, _k: &str, _now: u64, _w: u64) -> Result<u32, StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn failure_count(&self, _k: &str, _now: u64, _w: u64) -> Result<u32, StoreError> {
+        self.count.clone()
+    }
+    fn is_banned(&self, _k: &str, _now: u64) -> Result<Option<u64>, StoreError> {
+        Ok(self.banned)
+    }
+    fn ban(&self, _k: &str, _until: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn clear_failures(&self, _k: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn reset(&self, _k: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn purge_expired(&self, _now: u64) -> Result<usize, StoreError> {
+        Err(StoreError::Unavailable)
+    }
+}
+
+/// 计数正常、只有写封禁故障的后端 —— 钉住「封禁没写进去」的降级形态。
+#[derive(Debug)]
+struct BanWriteFailsStore(MemoryThrottleStore);
+
+impl ThrottleStore for BanWriteFailsStore {
+    fn record_failure(&self, k: &str, now: u64, w: u64) -> Result<u32, StoreError> {
+        self.0.record_failure(k, now, w)
+    }
+    fn failure_count(&self, k: &str, now: u64, w: u64) -> Result<u32, StoreError> {
+        self.0.failure_count(k, now, w)
+    }
+    fn is_banned(&self, k: &str, now: u64) -> Result<Option<u64>, StoreError> {
+        self.0.is_banned(k, now)
+    }
+    fn ban(&self, _k: &str, _until: u64) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn clear_failures(&self, k: &str) -> Result<(), StoreError> {
+        self.0.clear_failures(k)
+    }
+    fn reset(&self, k: &str) -> Result<(), StoreError> {
+        self.0.reset(k)
+    }
+    fn purge_expired(&self, now: u64) -> Result<usize, StoreError> {
+        self.0.purge_expired(now)
+    }
+}
+
 
 // ── 封禁路径 ──────────────────────────────────────────────────────────
 
@@ -159,25 +222,26 @@ fn slow_bruteforce_never_trips_the_threshold() {
 // ── 成功清零 ──────────────────────────────────────────────────────────
 
 #[test]
-fn success_clears_failures_and_ban() {
-    let t = throttle(2, 60, 900);
-    t.record_failure("acct:u1", NOW).unwrap();
+fn success_clears_failures_but_keeps_the_ban() {
+    // threshold = 2、ban_secs = 30（< window）：封禁到期时那次失败仍在窗口内，
+    // 于是「计数是否真被清掉」可观测 —— 没清的话 remaining 会是 0。
+    let t = throttle(2, 60, 30);
+    t.record_failure("ip:nat", NOW).unwrap();
     assert_eq!(
-        t.record_failure("acct:u1", NOW).unwrap(),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        t.record_failure("ip:nat", NOW).unwrap(),
+        ThrottleDecision::Banned { until: NOW + 30 }
     );
-    t.record_success("acct:u1").unwrap();
+    // 共享桶（NAT 后面的另一个人）认证成功：计数归零，封禁照旧
+    t.record_success("ip:nat").unwrap();
     assert_eq!(
-        t.check("acct:u1", NOW),
+        t.check("ip:nat", NOW + 1),
+        ThrottleDecision::Banned { until: NOW + 30 },
+        "认证成功只清计数，不能替桶里的其他人解除封禁"
+    );
+    assert_eq!(
+        t.check("ip:nat", NOW + 31),
         ThrottleDecision::Allow { remaining: 2 },
-        "凭据正确即解封并清零"
-    );
-    assert_eq!(
-        t.record_failure("acct:u1", NOW).unwrap(),
-        ThrottleDecision::Allow { remaining: 1 },
-        "计数从零重新起算"
+        "封禁自然到期后计数确实已归零（不是被一起洗白）"
     );
 }
 
@@ -238,6 +302,76 @@ fn check_is_unavailable_not_banned_when_store_fails() {
         "后端故障必须暴露为 Unavailable，而不是 Banned"
     );
     assert_ne!(t.check("ip:1.2.3.4", NOW), ThrottleDecision::Banned { until: 0 });
+}
+
+#[test]
+fn check_is_unavailable_when_the_count_query_fails_alone() {
+    // 查封禁成功（未封禁）但取计数故障：`check` 内层的 Err 分支，
+    // BrokenThrottleStore 只走到外层，这条路径此前没人踩过
+    let t = Throttle::new(
+        ReadFaultyStore {
+            banned: None,
+            count: Err(StoreError::Unavailable),
+        },
+        ThrottleConfig::default(),
+    );
+    assert_eq!(
+        t.check("ip:1.2.3.4", NOW),
+        ThrottleDecision::Unavailable,
+        "计数查不到时同样不能替调用方做决定"
+    );
+}
+
+#[test]
+fn ban_write_failure_leaves_the_key_at_zero_budget() {
+    // 已知降级（不是漏洞，但必须显式钉住）：计数已落库、封禁写失败 ⇒
+    // 返回 Err，下次 check 放行但 remaining == 0。调用方据 remaining 拒绝即可；
+    // 若这里返回 Unavailable 或 optimistic 的满额，反而会把状态说错。
+    let t = Throttle::new(
+        BanWriteFailsStore(MemoryThrottleStore::new()),
+        ThrottleConfig {
+            threshold: 2,
+            window_secs: 60,
+            ban_secs: 900,
+        },
+    );
+    assert_eq!(
+        t.record_failure("ip:a", NOW).unwrap(),
+        ThrottleDecision::Allow { remaining: 1 }
+    );
+    assert_eq!(
+        t.record_failure("ip:a", NOW).unwrap_err(),
+        StoreError::Unavailable,
+        "封禁写失败要报给调用方"
+    );
+    assert_eq!(
+        t.check("ip:a", NOW),
+        ThrottleDecision::Allow { remaining: 0 },
+        "封禁没写进去，但计数已到阈值"
+    );
+}
+
+#[test]
+fn check_does_not_trust_the_store_to_filter_expired_bans() {
+    // 后端原样返回 banned_until：直到点 `check` 必须自行判定为已解封，
+    // 否则一个过期的封禁会把 key 永久锁死（fail-closed，但仍是锁死）。
+    let t = Throttle::new(
+        ReadFaultyStore {
+            banned: Some(NOW),
+            count: Ok(0),
+        },
+        ThrottleConfig::default(),
+    );
+    assert_eq!(
+        t.check("ip:a", NOW),
+        ThrottleDecision::Allow { remaining: 5 },
+        "until <= now 视为已解封"
+    );
+    assert_eq!(
+        t.check("ip:a", NOW - 1),
+        ThrottleDecision::Banned { until: NOW },
+        "未到点仍要拦"
+    );
 }
 
 #[test]

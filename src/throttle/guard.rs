@@ -38,8 +38,10 @@ impl<S: ThrottleStore> Throttle<S> {
     /// `Unavailable` 后自行选择，建议放行 + 告警。
     pub fn check(&self, key: &str, now: u64) -> ThrottleDecision {
         match self.store.is_banned(key, now) {
-            Ok(Some(until)) => ThrottleDecision::Banned { until },
-            Ok(None) => match self
+            // 自己比对 `now`，不假定后端已过滤：后端若返回原始值（第三方的
+            // Redis 实现常见的做法），直接信它就等于把 key 永久锁死。
+            Ok(Some(until)) if until > now => ThrottleDecision::Banned { until },
+            Ok(_) => match self
                 .store
                 .failure_count(key, now, self.config.window_secs)
             {
@@ -57,6 +59,14 @@ impl<S: ThrottleStore> Throttle<S> {
     /// 判定顺序：先拿窗口内计数，`count >= threshold` 时写封禁并返回解封时刻。
     /// `threshold` 是「第几次失败触发封禁」，因此第 `threshold` 次调用返回的是
     /// `Banned` 而不是 `Allow { remaining: 0 }` —— 剩余额度为 0 的那次已经是拒绝。
+    ///
+    /// 注意 `record_failure`（计数）与 `ban`（封禁）是两次独立的锁获取，**不原子**：
+    /// 两者之间并发一次 `reset` 是可能的，结果是刚认证成功的用户又被封上
+    /// （可用性问题，不构成绕过 —— 计数也确实已经记下了）。若那个窗口不可接受，
+    /// 得把「计数 + 判阈值 + 写封禁」并成一个 store 操作。
+    ///
+    /// 同理，`ban` 写失败时计数已经落库：本调用返回 `Err`，但下一步 `check`
+    /// 会看到 `Allow { remaining: 0 }`（额度确实耗尽），由调用方据此拒绝。
     pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError> {
         let count = self.store.record_failure(key, now, self.config.window_secs)?;
         if count >= self.config.threshold {
@@ -69,9 +79,18 @@ impl<S: ThrottleStore> Throttle<S> {
         })
     }
 
-    /// 认证成功时调用，清零计数。**同时清掉封禁**（凭据正确说明不是暴力破解）。
+    /// 认证成功时调用：**只清失败计数，保留封禁**。
+    ///
+    /// 「凭据正确 ⇒ 不是暴力破解 ⇒ 顺手解封」只对 `acct:` 桶成立。对 `ip:` 这类
+    /// 共享桶，封禁是 NAT / 代理后面的所有人共用的 —— 换成 `reset`（清计数 + 清封禁）
+    /// 意味着桶里**任意**另一个用户认证成功，就能替爆破者解除封禁并洗掉计数。
+    ///
+    /// 这是有意的安全取舍，不是漏写的细节：代价是账户桶下用户被爆破牵连时，
+    /// 即使立刻输对密码也要等满 `ban_secs`（默认 900 秒）才恢复；换来的是共享桶的
+    /// 封禁不会被他人一次成功认证解除。封禁不需要在这里额外清理，`is_banned` 的
+    /// `now` 过滤会让它自然到期；要人工提前解封用 [`Throttle::reset`]。
     pub fn record_success(&self, key: &str) -> Result<(), StoreError> {
-        self.store.reset(key)
+        self.store.clear_failures(key)
     }
 
     /// 人工解封 / 解限。

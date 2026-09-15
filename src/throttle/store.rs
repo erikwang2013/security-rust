@@ -18,8 +18,19 @@ pub trait ThrottleStore: Send + Sync {
     /// 乐观的满额数字（`remaining` 会被写进 X-RateLimit 响应头，谎报等于误导调用方）。
     fn failure_count(&self, key: &str, now: u64, window_secs: u64) -> Result<u32, StoreError>;
     /// 该 key 是否处于封禁中；是则返回解封时刻。
+    ///
+    /// 返回**未过滤的原始值也是合法的**：`Throttle::check` 会自己拿 `now` 比对
+    /// `until` 再决定是否 `Banned`，后端不必代劳（返回 `Some(until)` 且
+    /// `until <= now` 不会被当成永久封禁）。
     fn is_banned(&self, key: &str, now: u64) -> Result<Option<u64>, StoreError>;
+    /// 写入封禁截止时刻。**只能延长不能缩短**：已生效的封禁遇上更早的 `until`
+    /// 应被忽略（时钟回拨时 `now + ban_secs` 可能反而更小）。
     fn ban(&self, key: &str, until: u64) -> Result<(), StoreError>;
+    /// 只清空失败计数，**保留封禁**。
+    ///
+    /// 认证成功走这里，人工解封走 `reset`：二者合并会让共享桶（如 `ip:`）的封禁
+    /// 被桶里任意另一个人一次成功认证解除。
+    fn clear_failures(&self, key: &str) -> Result<(), StoreError>;
     /// 清零该 key 的失败计数与封禁。
     fn reset(&self, key: &str) -> Result<(), StoreError>;
     /// 清除已过期状态，返回清除条数。
@@ -32,9 +43,11 @@ pub trait ThrottleStore: Send + Sync {
 /// 单纯自增的计数器没法判断「哪几次失败已经滑出窗口」，只能整段清零。
 #[derive(Debug, Default)]
 struct Entry {
-    /// 窗口内的失败时刻，非递减。
+    /// 窗口内的失败时刻。时钟单调时才恰好是非递减的，回拨会破坏这个序 ——
+    /// 因此判定一律扫全量，不要用 `last()`。
     failures: Vec<u64>,
-    /// 封禁截止时刻；`None` 表示从未封禁。
+    /// 封禁截止时刻；`None` 表示从未封禁。只增不减：`ban` 取 max，时钟回拨
+    /// 不会把已生效的封禁缩短。
     banned_until: Option<u64>,
     /// 最近一次 `record_failure` 传入的窗口长度，仅供 `purge_expired` 判断陈旧。
     /// store 不记住窗口，就无法区分「窗口内仍有效的失败」与「早该滑出的失败」，
@@ -42,7 +55,17 @@ struct Entry {
     window_secs: u64,
 }
 
-/// 内存后端。无后台线程 —— 过期判定在每次读写时顺手做，回收靠 `purge_expired`。
+/// 内存后端。无后台线程，且**只有写路径**会清理：`record_failure` 顺手
+/// `retain` 掉滑出窗口的失败，`failure_count` / `is_banned` 这类读路径不碰状态。
+///
+/// 于是有两条边界：
+/// - 每个 key 的 `failures` 向量有界（每次 `record_failure` 都 retain，上界是
+///   窗口内的失败数）；
+/// - **map 本身的条目数无上限** —— key 只增不减，只有 `purge_expired`（和
+///   `reset`）会移除条目。
+///
+/// 长期运行的进程必须按定时器调 `purge_expired`（间隔取 `window_secs` 量级即可），
+/// 否则 key 基数的增长会一直吃内存。
 #[derive(Debug)]
 pub struct MemoryThrottleStore {
     entries: Mutex<HashMap<String, Entry>>,
@@ -107,10 +130,18 @@ impl ThrottleStore for MemoryThrottleStore {
     }
 
     fn ban(&self, key: &str, until: u64) -> Result<(), StoreError> {
-        Self::lock(&self.entries)
-            .entry(key.to_string())
-            .or_default()
-            .banned_until = Some(until);
+        let mut g = Self::lock(&self.entries);
+        let e = g.entry(key.to_string()).or_default();
+        // 取 max：时钟回拨后 `now + ban_secs` 可能早于已写入的 until，
+        // 无条件覆盖等于让攻击者靠回拨提前解封。
+        e.banned_until = Some(e.banned_until.map_or(until, |existing| existing.max(until)));
+        Ok(())
+    }
+
+    fn clear_failures(&self, key: &str) -> Result<(), StoreError> {
+        if let Some(e) = Self::lock(&self.entries).get_mut(key) {
+            e.failures.clear();
+        }
         Ok(())
     }
 
@@ -127,10 +158,12 @@ impl ThrottleStore for MemoryThrottleStore {
             // 两者都不成立才叫「过期」—— 只清封禁记录而不看失败，会把还在
             // 计数窗口内的对手顺手洗白，等于给攻击者一个免费的计数重置。
             let banned = e.banned_until.is_some_and(|until| until > now);
+            // 扫全量而非取 `last()`：`failures` 只在时钟单调时才是非递减的，
+            // 回拨会让 `last()` 变成最小值，把窗口内的有效失败整条丢掉。
             let fresh = e
                 .failures
-                .last()
-                .is_some_and(|t| *t > Self::cutoff(now, e.window_secs));
+                .iter()
+                .any(|t| *t > Self::cutoff(now, e.window_secs));
             banned || fresh
         });
         Ok(before - g.len())
@@ -254,6 +287,40 @@ mod tests {
     fn purge_empty_store_is_zero() {
         let s = store();
         assert_eq!(s.purge_expired(NOW).unwrap(), 0);
+    }
+
+    #[test]
+    fn purge_keeps_in_window_failures_after_clock_rollback() {
+        // 回拨让 failures 乱序成 [NOW, NOW-200]：取 `last()` 会拿到最小值，
+        // 把仍在窗口内的 [NOW] 判成过期 —— 攻击者只要诱发一次回拨再等一次
+        // purge，计数就被免费重置。判定必须扫全量。
+        let s = store();
+        s.record_failure("k", NOW, 60).unwrap();
+        s.record_failure("k", NOW - 200, 60).unwrap();
+        assert_eq!(s.failure_count("k", NOW, 60).unwrap(), 1);
+        assert_eq!(
+            s.purge_expired(NOW).unwrap(),
+            0,
+            "窗口内仍有有效失败，不该清"
+        );
+        assert_eq!(
+            s.failure_count("k", NOW, 60).unwrap(),
+            1,
+            "计数不能被 purge 免费重置"
+        );
+    }
+
+    #[test]
+    fn ban_cannot_be_shortened_by_clock_rollback() {
+        let s = store();
+        s.ban("k", NOW + 900).unwrap();
+        // 回拨后重新封禁：天真的 `until = now + ban_secs` 会写进一个更早的时刻
+        s.ban("k", NOW - 5_000 + 900).unwrap();
+        assert_eq!(
+            s.is_banned("k", NOW).unwrap(),
+            Some(NOW + 900),
+            "封禁只能延长，回拨不能提前解封"
+        );
     }
 
     #[test]
