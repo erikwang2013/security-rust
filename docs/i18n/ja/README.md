@@ -4,7 +4,7 @@
 
 **🌐 [中文 (原文)](../../README.md)**
 
-Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃、プロトコル攻撃、データ/シリアライゼーション攻撃、ファイル/機密データ漏洩の 4 大カテゴリ、全 27 個の検出器をカバーします。外部フレームワーク依存ゼロ、純粋な文字列スキャン。
+Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃、プロトコル攻撃、データ/シリアライゼーション攻撃、ファイル/機密データ漏洩の 4 大カテゴリ、全 32 個の検出器をカバーします。加えて、セッションセキュリティ (`session`)、レート制限とアカウント封鎖 (`throttle`)、リスクスコアリング (`score`) の 3 モジュールを公開します。外部フレームワーク依存ゼロ、依存クレートは `regex` のみです。
 
 ---
 
@@ -12,14 +12,17 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 
 ### なぜ「検出」であり「遮断」ではないのか
 
-本ライブラリは**純粋な入力スキャナ**として位置づけられています。文字列を受け取り、構造化された検出結果を返します。どの Web フレームワークにも紐づかず、HTTP リクエスト/レスポンスの解析も行わず、リアルタイム遮断も実装しません。これにより、WAF ルールエンジン、ログ監査、API ゲートウェイ前置検証、CLI セキュリティスキャンツールなど、あらゆる処理チェーンに組み込むことができます。
+本ライブラリの検出器は**純粋な入力スキャナ**として位置づけられています。文字列を受け取り、構造化された検出結果を返します。どの Web フレームワークにも紐づかず、HTTP リクエスト/レスポンスの解析も行わず、リアルタイム遮断も実装しません。これにより、WAF ルールエンジン、ログ監査、API ゲートウェイ前置検証、CLI セキュリティスキャンツールなど、あらゆる処理チェーンに組み込むことができます。
+
+`session` と `throttle` はこの例外で、状態と識別情報を扱います。両者は意図的に `Detector` trait を実装していません —— 「token + フィンガープリント + 位置 + 時刻」という複合入力は、単一文字列を受け取る `Detector::detect(&str)` では表現できないためです。
 
 ### アーキテクチャ原則
 
 - **単一責任** — 各検出器は 1 種類の攻撃タイプのみを担当し、内部にコンパイル済みの正規表現パターンセットを保持
 - **統一インターフェース** — `Detector` trait が全検出器の唯一の契約: `fn detect(&self, input: &str) -> Option<DetectionResult>`
-- **デフォルト網羅** — `Scanner::default()` で全 27 個の検出器を一括装備、ゼロ設定で利用可能
+- **デフォルト網羅** — `Scanner::default()` で全 32 個の検出器を一括装備、ゼロ設定で利用可能
 - **任意設定** — `Scanner::builder()` によるカスタマイズをサポート、`.with_detector()` で検出器を選択的に装備
+- **有状態モジュールの分離** — `session` / `throttle` は意図的に `Detector` trait を実装しない。有状態かつ識別情報に依存するため、`detect()` の契約では表現できない。ストレージは trait（`SessionStore` / `ThrottleStore`）で抽象化し、多インスタンス構成ではそれを実装して Redis などに接続する
 
 ### トレードオフ
 
@@ -27,7 +30,9 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 |------|------|------|
 | 正規表現 vs パーサー | 正規表現 | 検出シナリオでは速度優先。変形/迂回パターンへのカバレッジも優れる |
 | 先着順報告 vs 全量検出 | 全量検出 | 1 つの入力が複数の攻撃を同時にトリガーし得るため、見逃しを防ぐ |
-| ゼロ依存 vs serde 導入 | ゼロ依存 | `regex` + `thiserror` のみに依存。コンパイル高速、サイズ小 |
+| ゼロ依存 vs serde 導入 | ゼロ依存 | 依存クレートは `regex` のみ。コンパイル高速、サイズ小 |
+| 依存ゼロ vs 利便性 | 依存ゼロ | token と署名は呼び出し側が用意し、位置情報（緯度経度）も呼び出し側が解析する。その代わり、依存の追加も暗黙の I/O もない |
+| fail-closed vs 可用性 | 用途で分ける | `SessionGuard` はストレージ障害時に `Decision::Block` を返す（fail-closed、絶対に通さない）。`Throttle` は `ThrottleDecision::Unavailable` を返して判断を呼び出し側に委ねる —— 全ユーザーを止めるのは自己 DoS であり、レート制限は主たる認証ゲートではないため |
 
 ---
 
@@ -45,7 +50,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
                        │  │   Vec<Box<dyn Detector>>   │  │
                        │  │   ├─ XssDetector           │  │
                        │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×27               │  │
+                       │  │   ├─ ... ×32               │  │
                        │  └────────────────────────────┘  │
                        └──────────────┬───────────────────┘
                                       │
@@ -60,7 +65,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
        │              │              │
   ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
   │injection│  │  protocol   │  │  data  │  │  file   │
-  │  10 個  │  │   9 個      │  │ 5 個   │  │  3 個   │
+  │  11 個  │  │   11 個     │  │ 7 個   │  │  3 個   │
   └─────────┘  └─────────────┘  └────────┘  └─────────┘
 ```
 
@@ -69,10 +74,13 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | モジュール | パス | 検出器数 | 役割 |
 |------|------|---------|------|
 | コア | `src/lib.rs` `result.rs` `scanner.rs` | — | `Detector` trait、`DetectionResult`、`Scanner`/`ScannerBuilder` |
-| インジェクション | `src/injection/` | 10 | XSS、SQL インジェクション、コマンドインジェクション、NoSQL、LDAP、XPATH、JNDI、SSI、GraphQL、SSTI |
-| プロトコル | `src/protocol/` | 9 | SSRF、XXE、ヘッダーインジェクション、Host ヘッダー攻撃、リクエストスモグリング、オープンリダイレクト、CORS、WebSocket、DNS リバインディング |
-| データ | `src/data/` | 5 | PHP デシリアライゼーション、CSV 数式インジェクション、メールヘッダーインジェクション、JWT 攻撃、プロトタイプ汚染 |
+| インジェクション | `src/injection/` | 11 | XSS、SQL インジェクション、コマンドインジェクション、NoSQL、LDAP、XPATH、JNDI、SSI、GraphQL、SSTI、フォーマット文字列 |
+| プロトコル | `src/protocol/` | 11 | SSRF、XXE、ヘッダーインジェクション（CRLF 含む）、Host ヘッダー攻撃、リクエストスモグリング、オープンリダイレクト、CORS、WebSocket、DNS リバインディング、Log4Shell、HTTP パラメータ汚染 |
+| データ | `src/data/` | 7 | PHP デシリアライゼーション、CSV インジェクション、スプレッドシート数式インジェクション、メールヘッダーインジェクション、JWT 攻撃、プロトタイプ汚染、ReDoS |
 | ファイル | `src/file/` | 3 | パストラバーサル、悪意あるファイルアップロード、機密データ漏洩 |
+| セッション | `src/session/` | — | `SessionGuard`、`RequestContext`、`SessionVerdict`、`SessionStore`/`MemoryStore` —— クライアントによる乗っ取り、データ改竄、不可能旅行、token 失効の判定 |
+| レート制限 | `src/throttle/` | — | `Throttle`、`ThrottleDecision`、`ThrottleStore`/`MemoryThrottleStore` —— スライディングウィンドウ、閾値での封鎖、アカウントロック |
+| スコアリング | `src/score.rs` | — | `RiskLevel`、`RiskAssessment`、`Scanner::assess()` —— 低リスク信号を集約し、観測可能なリスク値にする |
 
 ### 検出結果の構造
 
@@ -82,7 +90,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 
 ## 実装機能
 
-### インジェクション攻撃（10 検出器）
+### インジェクション攻撃（11 検出器）
 
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
@@ -96,22 +104,25 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **ssi_injection** | `<!--#exec cmd=` コマンド実行、`<!--#include file=` ファイルインクルード、`<!--#echo var=` 変数出力、`<!--#fsize`/`<!--#flastmod` ファイル情報 | High |
 | **graphql_injection** | `__schema`/`__type` イントロスペクションクエリ、深いネストによる DoS（5 層以上） | Medium |
 | **ssti** | Jinja2 `{{}}`、FreeMarker `${}`、ERB `<%=` `<%@`、Velocity `#set()`、Python MRO `__mro__`/`__subclasses__()` サンドボックスエスケープ | Critical |
+| **format_string** | `%n`/`%hn`/`%lln` メモリ書き込み変換子、`%99999999d` 幅爆弾、連続 `%x%x%x`・区切り付き `%08x.%08x.%08x.%08x` のスタック読み出し、連続 `%s` | Medium |
 
-### プロトコル・リクエスト攻撃（9 検出器）
+### プロトコル・リクエスト攻撃（11 検出器）
 
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
 | **ssrf** | `169.254.169.254` クラウドメタデータ、RFC1918 内部 IP（10.x、172.16-31.x、192.168.x）、`127.x` loopback、`::1` IPv6 loopback、`0.0.0.0`、`gopher://`/`dict://`/`ftp://`/`file://` 危険なプロトコル | Critical |
 | **xxe** | `<!ENTITY` エンティティ宣言、`SYSTEM`/`PUBLIC` 外部参照、`%` パラメーターエンティティ、`<!DOCTYPE` DTD 宣言 | Critical |
-| **header_injection** | `%0d%0a` URL エンコード CRLF、`\r\n` 生 CRLF インジェクション | High |
+| **header_injection** | `%0d%0a` URL エンコード CRLF、`\r\n` 生 CRLF インジェクション、`%0d`/`%0a` の逆順ペア（LF-CR） | High |
 | **host_header** | 複数 Host ヘッダーインジェクション、`X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` ポイズニング、CRLF による Host 運搬 | High |
 | **request_smuggling** | 二重 `Transfer-Encoding` ヘッダー、`Content-Length: 0` スモグリング、`\r\n0\r\n` chunked 終端難読化 | High |
 | **open_redirect** | `//evil.com` プロトコル相対 URL、`javascript:`/`data:text/html` 疑似プロトコルによるリダイレクト | Medium |
 | **cors** | `Origin: null` バイパス、`Access-Control-Allow-Origin: *` + Credentials の組み合わせ | Medium |
 | **websocket** | `Upgrade: websocket` ハンドシェイク、`Origin: null` クロスドメイン WS、`ws://` 平文接続 | High |
 | **dns_rebinding** | Host ヘッダーが `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内部 IP、`localhost`、`::1`、`0.0.0.0` | High |
+| **log4shell** | `${lower:j}`/`${upper:J}` の大小文字折り畳み、`${::-j}` のプレフィックス折り畳み、lookup 展開後に `ndi:` が現れる混淆、`${${...}}` の入れ子展開、URL エンコード形態 `%24%7b...%7d` | Critical |
+| **hpp** | `;` と `&` の混用（`a=1&b=2;c=3`）、パラメータキーの重複 —— パーサーごとに解釈が食い違う HTTP パラメータ汚染 | Medium |
 
-### データ・シリアライゼーション攻撃（5 検出器）
+### データ・シリアライゼーション攻撃（7 検出器）
 
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
@@ -120,6 +131,8 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **mail_header** | `Bcc:`/`Cc:` ブラインドカーボンコピーインジェクション、`From:` 多重送信者、`MIME-Version:`/`Content-Type: multipart` MIME ヘッダーインジェクション、`boundary=` バウンダリー操作 | Medium |
 | **jwt_attack** | `alg: none` 空アルゴリズムバイパス、`kid` パストラバーサルインジェクション、空署名セグメント、空 payload セグメント | High |
 | **prototype_pollution** | `__proto__`/`constructor.prototype` プロトタイプチェーン汚染、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` プロパティハイジャック | High |
+| **formula_injection** | セル先頭の `=cmd` + パイプ（コマンド実行）、`HYPERLINK()`/`IMPORTXML()`/`WEBSERVICE()`/`RTD()` などデータ持ち出し・ローカル実行関数、DDE セル参照（`!A0`）、`DDE(` ペイロード、`@SUM(` などの旧式 `@` 数式 —— CSV の粗粒度層に対し、実行・持ち出し可能なペイロードだけを拾う精密層 | High |
+| **redos** | `(a+)+`/`(a*)*` の量詞の入れ子、`(a+){2,}`、`\d` と `\w` のような重複する文字クラス分岐、`(x\|)` の空分岐、先頭分岐が単一文字でプレフィックスが重なる `(a\|ab)*` —— 指数関数的バックトラックを起こす正規表現 | Medium |
 
 ### ファイル・機密データ（3 検出器）
 
@@ -153,7 +166,7 @@ let results = scanner.scan("<script>alert('xss')</script>");
 # ビルド
 cargo build --release
 
-# テスト（46 個の統合テスト）
+# テスト（ユニット 354 + 統合 46 + session 25 + session ライフサイクル 15 + throttle 22 = 462）
 cargo test
 
 # コードチェック
