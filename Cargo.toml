@@ -14,3 +14,10 @@ categories = ["security", "parsing"]
 
 [dependencies]
 regex = "1"
+
+[dev-dependencies]
+# 只给 examples/ 用。本 crate 的零依赖承诺针对 [dependencies] ——
+# 运行时依赖永远只有 regex。
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt"] }
+tower = { version = "0.5", features = ["util"] }
