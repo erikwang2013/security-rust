@@ -52,7 +52,6 @@ pub const MAX_LOGINS_PER_SUBJECT: usize = 10;
 pub struct MemoryStore {
     sessions: Mutex<HashMap<String, SessionRecord>>,
     logins: Mutex<HashMap<String, Vec<LoginPoint>>>,
-    max_logins: usize,
 }
 
 impl Default for MemoryStore {
@@ -66,7 +65,6 @@ impl MemoryStore {
         Self {
             sessions: Mutex::new(HashMap::new()),
             logins: Mutex::new(HashMap::new()),
-            max_logins: MAX_LOGINS_PER_SUBJECT,
         }
     }
 
@@ -102,6 +100,8 @@ impl SessionStore for MemoryStore {
         Ok(())
     }
 
+    // ponytail: 持全局锁的 O(n) 全表扫描。内存后端规模下可接受；
+    // 若单 subject 会话数上到万级或需跨实例，加 subject -> tokens 索引。
     fn revoke_subject(&self, subject: &str) -> Result<usize, StoreError> {
         let mut n = 0;
         for r in Self::lock(&self.sessions).values_mut() {
@@ -124,10 +124,9 @@ impl SessionStore for MemoryStore {
         let mut g = Self::lock(&self.logins);
         let v = g.entry(subject.to_string()).or_default();
         v.push(point);
-        // 有界：只保留最近 max_logins 条
-        if v.len() > self.max_logins {
-            let excess = v.len() - self.max_logins;
-            v.drain(..excess);
+        // 有界：只保留最近 MAX_LOGINS_PER_SUBJECT 条
+        if v.len() > MAX_LOGINS_PER_SUBJECT {
+            v.drain(..v.len() - MAX_LOGINS_PER_SUBJECT);
         }
         Ok(())
     }
@@ -293,5 +292,21 @@ mod tests {
     fn purge_expired_on_empty_is_zero() {
         let s = MemoryStore::new();
         assert_eq!(s.purge_expired(1_000).unwrap(), 0);
+    }
+
+    #[test]
+    fn lock_recovers_from_poisoned_mutex() {
+        // 钉住 lock() 的恢复不变量：一次 panic 不能永久锁死会话存储。
+        let m = Mutex::new(rec("t1", "u1", 9_999));
+        std::panic::catch_unwind(|| {
+            let _guard = m.lock().unwrap();
+            panic!("poison");
+        })
+        .unwrap_err();
+        assert!(m.is_poisoned());
+
+        let g = MemoryStore::lock(&m);
+        assert_eq!(g.token, "t1");
+        assert_eq!(g.expires_at, 9_999);
     }
 }

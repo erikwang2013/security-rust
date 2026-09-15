@@ -101,8 +101,8 @@ impl SessionVerdict {
 
     /// 由威胁列表聚合：decision 取最严格者，severity 取最严重者。
     ///
-    /// `Severity` 的 `Ord` 顺序是声明顺序（Critical 最小），与严重程度**相反**，
-    /// 故此处用显式的 `severity_rank` 取最大，不能直接用 `max()`。
+    /// `Severity` 不提供任何序（派生 `Ord` 会按声明顺序 Critical < Low，与严重程度相反），
+    /// 因此严重度比较一律走显式的 `severity_rank`；decision 的比较则可用 `Decision` 的 `Ord`。
     pub fn from_threats(threats: Vec<SessionThreat>) -> Self {
         if threats.is_empty() {
             return Self::allow();
@@ -129,7 +129,7 @@ impl SessionVerdict {
     }
 }
 
-/// 严重度权重，数值越大越严重。与 `Severity` 的 `Ord` 顺序无关。
+/// 严重度权重，数值越大越严重。这是 `Severity` 唯一的排序依据。
 fn severity_rank(s: &Severity) -> u8 {
     match s {
         Severity::Low => 0,
@@ -235,9 +235,8 @@ mod tests {
 
     #[test]
     fn severity_rank_is_not_declaration_order() {
-        // Severity 的 Ord 声明顺序与严重程度相反，rank 必须独立于它
+        // Severity 没有任何 Ord，rank 是它唯一的严重度排序依据
         assert!(severity_rank(&Severity::Critical) > severity_rank(&Severity::Low));
-        assert!(Severity::Critical < Severity::Low); // 声明顺序确实是反的
     }
 
     #[test]
@@ -328,9 +327,16 @@ mod tests {
 
     #[test]
     fn errors_display_and_source() {
-        assert!(!SessionError::EmptyToken.to_string().is_empty());
-        assert!(!SessionError::UnknownSession.to_string().is_empty());
-        assert!(!StoreError::Unavailable.to_string().is_empty());
+        assert_eq!(SessionError::EmptyToken.to_string(), "token must not be empty");
+        assert_eq!(
+            SessionError::UnknownSession.to_string(),
+            "session not found or no longer valid"
+        );
+        assert_eq!(
+            StoreError::Unavailable.to_string(),
+            "session store unavailable"
+        );
+        assert_eq!(StoreError::Corrupt.to_string(), "session store corrupt");
         let e = SessionError::from(StoreError::Corrupt);
         assert!(std::error::Error::source(&e).is_some());
         assert!(std::error::Error::source(&SessionError::EmptyToken).is_none());
