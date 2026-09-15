@@ -35,5 +35,5 @@ jobs:
           git tag "${TAG}"
           git push origin "refs/tags/${TAG}"
           gh release create "${TAG}" \
-            --title "security-rust ${TAG}" \
+            --title "${TAG}" \
             --generate-notes
