@@ -109,7 +109,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | **request_smuggling** | Doppelte `Transfer-Encoding`-Header, Smuggling über `Content-Length: 0`, Obfuskation des Chunked-Abschlusses `\r\n0\r\n` | High |
 | **open_redirect** | Protokoll-relative URLs `//evil.com`, Sprünge über Pseudo-Protokolle `javascript:`/`data:text/html` | Medium |
 | **cors** | `Origin: null`-Bypass, Kombination `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Handshake `Upgrade: websocket`, Cross-Origin-WebSocket `Origin: null`, unverschlüsselte `ws://`-Verbindungen | High |
+| **websocket** | `Origin: null` zusammen mit einem WebSocket-Upgrade (CSWSH), `ws://` auf Loopback-/private/Link-Local-Adressen (inkl. Cloud-Metadaten-Endpunkt `169.254.169.254`) | High |
 | **dns_rebinding** | Host-Header mit internen IPs `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | Lookup-Obfuskation `${lower:j}`/`${upper:j}`, Obfuskation mit leerem String `${::-j}`, verschachtelte Lookups `${${...}:...}`, URL-kodierte Variante `%24%7b...%7d...ndi` | Critical |
 | **hpp** | Vermischung von Trennzeichen im Query-String `&a=1;b=2` und `;a=1&b=2` (Parameter-Pollution durch abweichende Parser-Semantik) | Medium |

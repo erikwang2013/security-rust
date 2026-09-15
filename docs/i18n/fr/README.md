@@ -109,7 +109,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 | **request_smuggling** | Doubles en-têtes `Transfer-Encoding`, contrebande `Content-Length: 0`, confusion de terminaison chunked `\r\n0\r\n` | High |
 | **open_redirect** | URL relative à protocole `//evil.com`, redirection par pseudo-protocole `javascript:`/`data:text/html` | Medium |
 | **cors** | Contournement `Origin: null`, combinaison `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Poignée de main `Upgrade: websocket`, WS interdomaines `Origin: null`, connexion en clair `ws://` | High |
+| **websocket** | `Origin: null` simultané avec une mise à niveau WebSocket (CSWSH), `ws://` vers des adresses de bouclage/privées/link-local (dont le point de métadonnées cloud `169.254.169.254`) | High |
 | **dns_rebinding** | En-tête Host vers IP internes `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | obfuscation de lookup `${lower:j}`/`${upper:j}`, obfuscation par chaîne vide `${::-j}`, lookups imbriqués `${${...}:...}`, variante encodée en URL `%24%7b...%7d...ndi` | Critical |
 | **hpp** | mélange de séparateurs dans la chaîne de requête `&a=1;b=2` et `;a=1&b=2` (pollution de paramètres par divergence d'analyseurs) | Medium |

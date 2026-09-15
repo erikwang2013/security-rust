@@ -124,7 +124,7 @@ Rust-এ লেখা একটি আক্রমণ শনাক্তকর�
 | **request_smuggling** | দ্বৈত `Transfer-Encoding` হেডার, `Content-Length: 0` স্মাগলিং, `\r\n0\r\n` chunked টার্মিনেশন অবফাসকেশন | High |
 | **open_redirect** | `//evil.com` প্রোটোকল-রিলেটিভ URL, `javascript:`/`data:text/html` সিউডো-প্রোটোকল জাম্প | Medium |
 | **cors** | `Origin: null` বাইপাস, `Access-Control-Allow-Origin: *` + Credentials কম্বিনেশন | Medium |
-| **websocket** | `Upgrade: websocket` হ্যান্ডশেক, `Origin: null` ক্রস-অরিজিন WS, `ws://` প্লেইনটেক্সট সংযোগ | High |
+| **websocket** | একইসাথে `Origin: null` ও WebSocket আপগ্রেড (CSWSH), `ws://` লুপব্যাক/প্রাইভেট/লিঙ্ক-লোকাল ঠিকানা লক্ষ্য করা (ক্লাউড মেটাডেটা এন্ডপয়েন্ট `169.254.169.254` সহ) | High |
 | **dns_rebinding** | Host হেডারে `127.x`/`10.x`/`192.168.x`/`172.16-31.x` ইন্টারনাল IP, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:j}` অবফাসকেশন, `${::-j}` খালি-স্ট্রিং অবফাসকেশন, নেস্টেড `jndi` লুকআপ, এবং URL-এনকোডেড রূপ `%24%7b...%3a...%7d...ndi` | Critical |
 | **hpp** | একই প্যারামিটার key-এর পুনরাবৃত্তি (`a=1&a=2`), এবং একই key-এর জন্য `&` ও `;`-এর মিশ্রণ — Java কন্টেইনারের ম্যাট্রিক্স প্যারামিটার `;jsessionid=` বাদ দিয়ে | Medium |

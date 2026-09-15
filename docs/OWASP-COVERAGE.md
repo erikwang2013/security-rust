@@ -94,7 +94,7 @@
 - `header_injection`：响应头注入（CRLF 拆出 `Location` / `Set-Cookie` 等）。
 - `host_header`：CRLF 后伪造 `Host`、`X-Forwarded-*`、`X-Original-URL`、`X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部。
 - `request_smuggling`：重复 `Transfer-Encoding`、`Transfer-Encoding: chunked`。
-- `websocket`：`Upgrade: websocket`、`Sec-WebSocket-Key:`、`Origin: null` 与 `Upgrade` 同现、`ws://`。
+- `websocket`：`Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）；`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`）。
 - `xxe`：`<!DOCTYPE`、`<!ENTITY`、`SYSTEM "..."`、`PUBLIC "..."`（XML 解析器被允许展开外部实体，本质是解析器配置问题）。
 - `upload`：webshell 特征 —— `<?php` / `<?=` / `<% @` / `<script language="php">`、`eval($_` / `system($_` / `passthru($_` 等、`$_GET[` / `$_POST[` / `$_REQUEST[` / `$_SERVER[`、`base64_decode(`。
 
@@ -168,7 +168,6 @@
 
 另需注意几处**设计上的误报面**（属取舍而非缺陷，调用方需自行判读）：
 
-- `websocket` 会把正常握手（`Upgrade: websocket` 与 `Sec-WebSocket-Key` 是握手必需头）判为 `High`。
 - `csv_injection` 认行首 `= + - @ \t \r`，正常文本里以 `-` 或 `=` 开头的行会命中（属粗粒度层，靠 `Scanner::assess` 的累积评分而非单条命中下判断）。
 - `cors` 的 `Access-Control-Allow-Origin: *`、`Origin: null` 在合法场景（公开静态资源、沙箱 iframe、`file://` 页面）也会出现。
 - `ssti` 认 `${` / `{{ }}` 这类模板语法，前端模板源码或 i18n 占位符可能命中。

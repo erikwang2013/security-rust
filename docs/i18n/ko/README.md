@@ -117,7 +117,7 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 | **request_smuggling** | 이중 `Transfer-Encoding` 헤더, `Content-Length: 0` 스머글링, `\r\n0\r\n` chunked 종료 난독화 | High |
 | **open_redirect** | `//evil.com` 프로토콜 상대 URL, `javascript:`/`data:text/html` 의사 프로토콜 점프 | Medium |
 | **cors** | `Origin: null` 우회, `Access-Control-Allow-Origin: *` + Credentials 조합 | Medium |
-| **websocket** | `Upgrade: websocket` 핸드셰이크, `Origin: null` 크로스 도메인 WS, `ws://` 평문 연결 | High |
+| **websocket** | `Origin: null` 과 WebSocket 업그레이드의 동시 출현(CSWSH), `ws://` 가 루프백/사설/링크 로컬 주소를 가리키는 경우(클라우드 메타데이터 엔드포인트 `169.254.169.254` 포함) | High |
 | **dns_rebinding** | Host 헤더가 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 사설 IP, `localhost`, `::1`, `0.0.0.0`인 경우 | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` 대소문자 접기, `${::-j}` 접두사 접기, lookup 전개 후 `ndi:`가 나타나는 난독화, `${${...}}` 중첩 전개, URL 인코딩 형태 `%24%7b...%7d` | Critical |
 | **hpp** | `;`와 `&` 혼용(`a=1&b=2;c=3`), 파라미터 키 중복 —— 파서마다 해석이 갈리는 HTTP 파라미터 폴루션 | Medium |

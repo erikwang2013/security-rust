@@ -120,7 +120,7 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 | **request_smuggling** | Duplicate `Transfer-Encoding` headers, `Content-Length: 0` smuggling, `\r\n0\r\n` chunked termination obfuscation | High |
 | **open_redirect** | Protocol-relative URLs `//evil.com`, pseudo-protocol redirects via `javascript:`/`data:text/html` | Medium |
 | **cors** | `Origin: null` bypass, `Access-Control-Allow-Origin: *` combined with credentials | Medium |
-| **websocket** | `Upgrade: websocket` handshake, cross-origin WS via `Origin: null`, plaintext `ws://` connections | High |
+| **websocket** | `Origin: null` co-occurring with a WebSocket upgrade (CSWSH), `ws://` targeting loopback / private / link-local addresses (including the cloud metadata endpoint `169.254.169.254`) | High |
 | **dns_rebinding** | Host header as private IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` case-folding, `${::-j}` prefix folding, `${<lookup>:...}ndi:` where the lookup expands into `jndi`, nested `${${<lookup>...}}` expansion, URL-encoded `%24%7b...%7d...ndi` | Critical |
 | **hpp** | Mixed `&`/`;` parameter separators (`?a=1&b=2;c=3`) that make two parser layers disagree, repeated keys such as `?id=1&id=2` | Medium |

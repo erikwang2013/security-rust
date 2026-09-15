@@ -117,7 +117,7 @@ Rust で書かれた攻撃検出ライブラリ。インジェクション攻撃
 | **request_smuggling** | 二重 `Transfer-Encoding` ヘッダー、`Content-Length: 0` スモグリング、`\r\n0\r\n` chunked 終端難読化 | High |
 | **open_redirect** | `//evil.com` プロトコル相対 URL、`javascript:`/`data:text/html` 疑似プロトコルによるリダイレクト | Medium |
 | **cors** | `Origin: null` バイパス、`Access-Control-Allow-Origin: *` + Credentials の組み合わせ | Medium |
-| **websocket** | `Upgrade: websocket` ハンドシェイク、`Origin: null` クロスドメイン WS、`ws://` 平文接続 | High |
+| **websocket** | `Origin: null` と WebSocket アップグレードの同時出現（CSWSH）、`ws://` がループバック / プライベート / リンクローカルアドレスを指す場合（クラウドメタデータエンドポイント `169.254.169.254` を含む） | High |
 | **dns_rebinding** | Host ヘッダーが `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内部 IP、`localhost`、`::1`、`0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` の大小文字折り畳み、`${::-j}` のプレフィックス折り畳み、lookup 展開後に `ndi:` が現れる混淆、`${${...}}` の入れ子展開、URL エンコード形態 `%24%7b...%7d` | Critical |
 | **hpp** | `;` と `&` の混用（`a=1&b=2;c=3`）、パラメータキーの重複 —— パーサーごとに解釈が食い違う HTTP パラメータ汚染 | Medium |

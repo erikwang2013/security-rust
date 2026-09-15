@@ -123,7 +123,7 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 | **request_smuggling** | 双重 `Transfer-Encoding` 头、`Content-Length: 0` 走私、`\r\n0\r\n` chunked 终止混淆 | High |
 | **open_redirect** | `//evil.com` 协议相对 URL、`javascript:`/`data:text/html` 伪协议跳转 | Medium |
 | **cors** | `Origin: null` 绕过、`Access-Control-Allow-Origin: *` + Credentials 组合 | Medium |
-| **websocket** | `Upgrade: websocket` 握手、`Origin: null` 跨域 WS、`ws://` 明文连接 | High |
+| **websocket** | `Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）、`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`） | High |
 | **dns_rebinding** | Host 头为 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内网 IP、`localhost`、`::1`、`0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:J}` 单字符大小写折叠、`${::-j}` 前缀折叠、`${env:…}ndi:` 等 lookup 展开后才拼出 JNDI（载荷不含 `jndi` 字面量）、`${${lower:…}}` 嵌套展开、`%24%7Blower%3Aj%7Dndi` URL 编码绕过 | Critical |
 | **hpp** | 同名参数重复（`?id=1&id=2`）、`&` 与 `;` 分隔符混用（`?a=1&b=2;c=3`，两层解析器得出不同的参数个数）；`;jsessionid=` 矩阵参数属路径分隔符，被排除 | Medium |

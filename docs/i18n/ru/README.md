@@ -109,7 +109,7 @@
 | **request_smuggling** | Двойной заголовок `Transfer-Encoding`, контрабанда через `Content-Length: 0`, путаница завершения chunked `\r\n0\r\n` | High |
 | **open_redirect** | Протокол-относительные URL `//evil.com`, переходы по псевдопротоколам `javascript:`/`data:text/html` | Medium |
 | **cors** | Обход через `Origin: null`, комбинация `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Рукопожатие `Upgrade: websocket`, кросс-доменный WS с `Origin: null`, открытое соединение `ws://` | High |
+| **websocket** | `Origin: null` одновременно с WebSocket-апгрейдом (CSWSH), `ws://` на loopback/приватные/link-local адреса (включая endpoint метаданных облака `169.254.169.254`) | High |
 | **dns_rebinding** | Host-заголовок с внутренними IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | обфускация lookup `${lower:j}`/`${upper:j}`, обфускация пустой строкой `${::-j}`, вложенные lookup `${${...}:...}`, URL-кодированный вариант `%24%7b...%7d...ndi` | Critical |
 | **hpp** | смешение разделителей в строке запроса `&a=1;b=2` и `;a=1&b=2` (загрязнение параметров из-за расхождения парсеров) | Medium |

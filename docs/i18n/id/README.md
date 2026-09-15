@@ -124,7 +124,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | **request_smuggling** | Header `Transfer-Encoding` ganda, penyelundupan `Content-Length: 0`, obfuscation terminasi chunked `\r\n0\r\n` | High |
 | **open_redirect** | URL relatif protokol `//evil.com`, lompatan protokol semu `javascript:`/`data:text/html` | Medium |
 | **cors** | Bypass `Origin: null`, kombinasi `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Handshake `Upgrade: websocket`, WS lintas domain `Origin: null`, koneksi plaintext `ws://` | High |
+| **websocket** | `Origin: null` bersamaan dengan upgrade WebSocket (CSWSH), `ws://` menuju alamat loopback/pribadi/link-local (termasuk endpoint metadata cloud `169.254.169.254`) | High |
 | **dns_rebinding** | Host header berupa IP intranet `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | Obfuskasi `${lower:j}`/`${upper:j}`, obfuskasi string kosong `${::-j}`, lookup `jndi` bersarang, dan bentuk terenkode URL `%24%7b...%3a...%7d...ndi` | Critical |
 | **hpp** | Pengulangan key parameter yang sama (`a=1&a=2`), serta campuran `&` dan `;` untuk key yang sama — mengecualikan `;jsessionid=` untuk parameter matriks kontainer Java | Medium |

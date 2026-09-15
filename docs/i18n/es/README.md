@@ -109,7 +109,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | **request_smuggling** | Cabeceras `Transfer-Encoding` duplicadas, contrabando `Content-Length: 0`, ofuscación de terminación chunked `\r\n0\r\n` | High |
 | **open_redirect** | URL relativa a protocolo `//evil.com`, saltos por pseudo protocolos `javascript:`/`data:text/html` | Medium |
 | **cors** | Bypass `Origin: null`, combinación `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Handshake `Upgrade: websocket`, WS entre dominios `Origin: null`, conexiones en claro `ws://` | High |
+| **websocket** | `Origin: null` junto con una actualización WebSocket (CSWSH), `ws://` hacia direcciones de loopback/privadas/link-local (incluido el endpoint de metadatos cloud `169.254.169.254`) | High |
 | **dns_rebinding** | Host header con IPs internas `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | ofuscación de lookup `${lower:j}`/`${upper:j}`, ofuscación con cadena vacía `${::-j}`, lookups anidados `${${...}:...}`, variante codificada en URL `%24%7b...%7d...ndi` | Critical |
 | **hpp** | mezcla de separadores en la cadena de consulta `&a=1;b=2` y `;a=1&b=2` (contaminación de parámetros por divergencia entre analizadores) | Medium |

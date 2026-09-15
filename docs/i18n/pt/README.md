@@ -109,7 +109,7 @@ Esta biblioteca se posiciona como um **scanner de entrada puro** — recebe stri
 | **request_smuggling** | Cabeçalhos duplos `Transfer-Encoding`, contrabando `Content-Length: 0`, ofuscação de término chunked `\r\n0\r\n` | High |
 | **open_redirect** | URLs relativas de protocolo `//evil.com`, redirecionamento por protocolos pseudo `javascript:`/`data:text/html` | Medium |
 | **cors** | Bypass `Origin: null`, combinação `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | Handshake `Upgrade: websocket`, WS entre origens `Origin: null`, conexão em texto puro `ws://` | High |
+| **websocket** | `Origin: null` junto com um upgrade WebSocket (CSWSH), `ws://` para endereços de loopback/privados/link-local (incluindo o endpoint de metadados de nuvem `169.254.169.254`) | High |
 | **dns_rebinding** | Host header com IPs internos `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | ofuscação de lookup `${lower:j}`/`${upper:j}`, ofuscação com string vazia `${::-j}`, lookups aninhados `${${...}:...}`, variante codificada em URL `%24%7b...%7d...ndi` | Critical |
 | **hpp** | mistura de separadores na query string `&a=1;b=2` e `;a=1&b=2` (poluição de parâmetros por divergência entre parsers) | Medium |

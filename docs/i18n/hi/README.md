@@ -124,7 +124,7 @@ Rust में लिखी गई हमले का पता लगाने
 | **request_smuggling** | दोहरा `Transfer-Encoding` हेडर, `Content-Length: 0` स्मगलिंग, `\r\n0\r\n` chunked टर्मिनेशन अस्पष्टता | High |
 | **open_redirect** | `//evil.com` प्रोटोकॉल-रिलेटिव URL, `javascript:`/`data:text/html` छद्म-प्रोटोकॉल रीडायरेक्ट | Medium |
 | **cors** | `Origin: null` बाईपास, `Access-Control-Allow-Origin: *` + Credentials संयोजन | Medium |
-| **websocket** | `Upgrade: websocket` हैंडशेक, `Origin: null` क्रॉस-डोमेन WS, `ws://` प्लेनटेक्स्ट कनेक्शन | High |
+| **websocket** | `Origin: null` और WebSocket अपग्रेड का साथ-साथ होना (CSWSH), `ws://` का लूपबैक/प्राइवेट/लिंक-लोकल पते पर इंगित होना (क्लाउड मेटाडेटा एंडपॉइंट `169.254.169.254` सहित) | High |
 | **dns_rebinding** | Host हेडर में `127.x`/`10.x`/`192.168.x`/`172.16-31.x` इंट्रानेट IP, `localhost`, `::1`, `0.0.0.0` | High |
 | **log4shell** | `${lower:j}`/`${upper:j}` अस्पष्टता, `${::-j}` खाली-स्ट्रिंग अस्पष्टता, नेस्टेड `jndi` लुकअप, और URL-एन्कोडेड रूप `%24%7b...%3a...%7d...ndi` | Critical |
 | **hpp** | एक ही पैरामीटर key का दोहराव (`a=1&a=2`), तथा उसी key के लिए `&` और `;` का मिश्रण — Java कंटेनर के मैट्रिक्स पैरामीटर `;jsessionid=` को छोड़कर | Medium |

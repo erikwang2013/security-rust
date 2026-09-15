@@ -124,7 +124,7 @@
 | **request_smuggling** | رؤوس `Transfer-Encoding` مزدوجة، تهريب `Content-Length: 0`، تشويش إنهاء chunked `\r\n0\r\n` | High |
 | **open_redirect** | عناوين نسبية للبروتوكول `//evil.com`، قفزات البروتوكولات الزائفة `javascript:`/`data:text/html` | Medium |
 | **cors** | تجاوز `Origin: null`، تركيبة `Access-Control-Allow-Origin: *` + Credentials | Medium |
-| **websocket** | مصافحة `Upgrade: websocket`، WS عبر النطاقات بـ `Origin: null`، اتصال نصي صريح `ws://` | High |
+| **websocket** | `Origin: null` مع ترقية WebSocket في الوقت نفسه (CSWSH)، `ws://` موجّه إلى عناوين loopback أو الخاصة أو link-local (بما فيها نقطة نهاية البيانات الوصفية السحابية `169.254.169.254`) | High |
 | **dns_rebinding** | رأس Host بعناوين IP داخلية `127.x`/`10.x`/`192.168.x`/`172.16-31.x`، `localhost`، `::1`، `0.0.0.0` | High |
 | **log4shell** | تشويش `${lower:j}`/`${upper:j}`، وتشويش السلسلة الفارغة `${::-j}`، والبحث المتداخل `jndi`، والنظير المرمّز بـ URL `%24%7b...%3a...%7d...ndi` | Critical |
 | **hpp** | تكرار المفتاح نفسه للمعامل (`a=1&a=2`)، والخلط بين `&` و`;` لنفس المفتاح — مع استثناء `;jsessionid=` الخاص بمعاملات المصفوفة في حاويات Java | Medium |
