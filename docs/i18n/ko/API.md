@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### 빠른 시작
@@ -208,6 +208,6 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 
 ## 성능
 
-Release 빌드 실측(노트북, 단일 스레드)에서 단일 탐지기 스캔은 1µs 전후, 전체 32개 탐지기 스캔은 수십 µs/회다. 값은 CPU와 입력 길이에 의존한다. 높은 처리량 시나리오(API 게이트웨이, 로그 파이프라인)에서는 `scan_with()`로 대상 탐지기를 좁히는 것을 검토하라.
+전체 32개 탐지기 스캔은 수십 µs/회다. 값은 CPU, 탐지기 수, 입력 길이에 의존하므로 자신의 하드웨어와 부하에서 직접 측정하라. 높은 처리량 시나리오(API 게이트웨이, 로그 파이프라인)에서는 `scan_with()`로 대상 탐지기를 좁히는 것을 검토하라.
 
 각 탐지기의 정규식은 `LazyLock`의 `Vec<Regex>`로 보관되어 프로세스당 한 번만 컴파일된다(두 번째 스캔부터는 컴파일 비용이 들지 않는다).

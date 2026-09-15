@@ -166,4 +166,4 @@ Ein `RequestContext` wird vollständig vom Aufrufer befüllt: Die Bibliothek for
 
 ## Leistung
 
-In einem Release-Build dauert ein Scan mit einem einzelnen Detektor ~100 ns pro Eingabe (vorcompilierte RegexSet); ein Scan mit allen 32 Detektoren etwa ~5 μs pro Eingabe. Geeignet für Szenarien mit hohem Durchsatz (API-Gateways, Log-Pipelines).
+Jeder Detektor hält seine Muster in einer statischen Tabelle `static PATTERNS: LazyLock<Vec<Regex>>`: Jede Regex wird beim ersten Zugriff innerhalb des Prozesses einmal kompiliert und danach bei jedem Aufruf wiederverwendet, ohne weiteren Kompilieraufwand. Ein Scan mit allen 32 Detektoren dauert pro Eingabe einige Dutzend Mikrosekunden; der Aufwand wächst mit der Anzahl der Detektoren und der Länge der Eingabe. Messen Sie den tatsächlichen Wert auf Ihrer eigenen Hardware und unter Ihrer Last. Geeignet für Szenarien mit hohem Durchsatz (API-Gateways, Log-Pipelines).

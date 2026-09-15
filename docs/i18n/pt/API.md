@@ -166,4 +166,4 @@ O chamador preenche um `RequestContext` por completo: a biblioteca não traz uma
 
 ## Desempenho
 
-Em builds de release, a varredura com um único detector leva ~100ns/varredura (RegexSet pré-compilado), e a varredura completa com os 32 detectores leva aproximadamente ~5μs/varredura. Adequado para cenários de alto throughput (gateways de API, pipelines de log).
+Cada detector mantém seus padrões em uma tabela estática `static PATTERNS: LazyLock<Vec<Regex>>`: cada expressão regular é compilada uma única vez, no primeiro uso dentro do processo, e reutilizada a cada chamada seguinte, sem custo de compilação adicional. A varredura completa com os 32 detectores leva dezenas de microssegundos por varredura, e esse custo cresce com o número de detectores e o comprimento da entrada. Meça o valor real no seu próprio hardware e com a sua carga de trabalho. Adequado para cenários de alto throughput (gateways de API, pipelines de log).

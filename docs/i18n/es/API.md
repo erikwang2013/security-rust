@@ -166,4 +166,4 @@ El llamador rellena por completo un `RequestContext`: la biblioteca no incorpora
 
 ## Rendimiento
 
-En builds Release, un detector individual escanea en ~100ns/operación (con RegexSet precompilado), y el escaneo completo con los 32 detectores tarda ~5μs/operación. Adecuado para escenarios de alto rendimiento (puertas de enlace de API, pipelines de logs).
+Cada detector guarda sus patrones en una tabla estática `static PATTERNS: LazyLock<Vec<Regex>>`: cada expresión regular se compila una sola vez, en su primer uso dentro del proceso, y se reutiliza en cada llamada posterior, sin coste de compilación añadido. El escaneo completo con los 32 detectores tarda decenas de microsegundos por operación, y ese coste crece con el número de detectores y la longitud de la entrada. Mide el valor real en tu propio hardware y con tu carga de trabajo. Adecuado para escenarios de alto rendimiento (puertas de enlace de API, pipelines de logs).

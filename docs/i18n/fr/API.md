@@ -166,4 +166,4 @@ Un `RequestContext` est entièrement rempli par l'appelant : la bibliothèque ne
 
 ## Performances
 
-En build Release, un détecteur unique analyse en ~100 ns/entrée (RegexSet précompilé), et la totalité des 32 détecteurs en ~5 μs/entrée. Convient aux scénarios à haut débit (passerelles API, pipelines de journaux).
+Chaque détecteur conserve ses motifs dans une table statique `static PATTERNS: LazyLock<Vec<Regex>>` : chaque expression est compilée une seule fois, à sa première utilisation dans le processus, puis réutilisée à chaque appel, sans coût de compilation supplémentaire. La totalité des 32 détecteurs analyse une entrée en quelques dizaines de microsecondes ; ce coût augmente avec le nombre de détecteurs et la longueur de l'entrée. Mesurez la valeur réelle sur votre propre matériel et sous votre propre charge. Convient aux scénarios à haut débit (passerelles API, pipelines de journaux).

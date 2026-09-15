@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "1.0.4"
+security-rust = "1.0.8"
 ```
 
 ### Quick Start
@@ -373,4 +373,4 @@ pub trait ThrottleStore: Send + Sync {
 
 ## Performance
 
-In a Release build, a single detector scans in ~100ns per invocation (precompiled RegexSet), and a full scan with all 32 detectors takes ~5μs per invocation. Suitable for high-throughput scenarios (API gateways, log pipelines).
+Each detector keeps its patterns in a `static PATTERNS: LazyLock<Vec<Regex>>` table: every regex is compiled once, on first use within the process, and reused on every later call, so no compilation cost remains. A full scan with all 32 detectors takes tens of microseconds per invocation, and the cost grows with the number of detectors and the length of the input. Benchmark on your own hardware and workload for a real figure. Suitable for high-throughput scenarios (API gateways, log pipelines).

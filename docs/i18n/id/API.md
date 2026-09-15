@@ -178,4 +178,4 @@ let a = Scanner::default().assess(input);  // langsung RiskAssessment
 
 ## Performa
 
-Pada build Release, pola regex dikompilasi statis lewat `LazyLock` dan tidak dikompilasi ulang setelah pemakaian pertama; biaya pemindaian satu regex berada di kisaran ratusan nanodetik. Pemindaian penuh 32 detektor atas input 26 byte memakan sekitar ~50μs/kali (pengukuran lokal, tumbuh seiring jumlah regex dan panjang input). Cocok untuk skenario throughput tinggi (gateway API, pipeline log).
+Pada build Release, setiap detektor menyimpan polanya dalam tabel statis `static PATTERNS: LazyLock<Vec<Regex>>`, sehingga setiap regex dikompilasi sekali saat pertama dipakai di dalam proses dan dipakai ulang pada setiap panggilan berikutnya tanpa biaya kompilasi lagi. Pemindaian penuh 32 detektor memakan waktu puluhan mikrodetik per kali, dan biaya ini tumbuh seiring jumlah detektor dan panjang input; ukur nilai sebenarnya di perangkat dan beban kerja Anda sendiri. Cocok untuk skenario throughput tinggi (gateway API, pipeline log).
