@@ -1,7 +1,7 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
 use super::store::ThrottleStore;
-use super::{StoreError, ThrottleConfig, ThrottleDecision};
+use super::{StoreError, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 /// 滑动窗口限流 / 封禁闸门。
 ///
@@ -54,7 +54,48 @@ impl<S: ThrottleStore> Throttle<S> {
         }
     }
 
+    /// 同时检查多个维度（如 `[ip_key, account_key]`），返回最严格的结果。
+    ///
+    /// 合并规则（严格度）：任一 `Banned` → `Banned`（取最晚的 `until`）；
+    /// 否则任一 `Unavailable` → `Unavailable`；否则 `Allow` 取**最小** `remaining`。
+    ///
+    /// 每个 key 各自独立查询，**不合并计数**：`ip:` 与 `acct:` 是两类互不干扰的桶，
+    /// 合并会让 NAT 后面的其他人替攻击者吃掉额度。
+    ///
+    /// 空 `keys` 什么都查不到，返回 `Allow { remaining: 0 }` 而非满额 —— 这个数字
+    /// 会被写进 X-RateLimit-* 响应头，凭空报满额等于谎报额度。
+    pub fn check_any(&self, keys: &[&str], now: u64) -> ThrottleDecision {
+        let mut banned_until: Option<u64> = None;
+        let mut unavailable = false;
+        let mut min_remaining: Option<u32> = None;
+        for key in keys {
+            match self.check(key, now) {
+                ThrottleDecision::Banned { until } => {
+                    // 不能提前返回：规则要求取「最晚」的解封时刻，得扫完所有 key
+                    banned_until = Some(banned_until.map_or(until, |b: u64| b.max(until)));
+                }
+                ThrottleDecision::Unavailable => unavailable = true,
+                ThrottleDecision::Allow { remaining } => {
+                    min_remaining = Some(min_remaining.map_or(remaining, |r| r.min(remaining)));
+                }
+            }
+        }
+        if let Some(until) = banned_until {
+            return ThrottleDecision::Banned { until };
+        }
+        if unavailable {
+            return ThrottleDecision::Unavailable;
+        }
+        ThrottleDecision::Allow {
+            remaining: min_remaining.unwrap_or(0),
+        }
+    }
+
     /// 认证失败时调用。达到 threshold 就封禁并返回 `Banned`，否则返回 `Allow { remaining }`。
+    ///
+    /// 返回 [`ThrottleOutcome`] 而非 `ThrottleDecision`：这里**不存在** `Unavailable`
+    /// —— 存储故障走 `Err`，两个可达状态对应两个分支，调用方不必再写一个永不执行的
+    /// 第三个臂。判断「要不要拦这个请求」用 [`Throttle::check_any`]。
     ///
     /// 判定顺序：先拿窗口内计数，`count >= threshold` 时写封禁并返回解封时刻。
     /// `threshold` 是「第几次失败触发封禁」，因此第 `threshold` 次调用返回的是
@@ -67,14 +108,14 @@ impl<S: ThrottleStore> Throttle<S> {
     ///
     /// 同理，`ban` 写失败时计数已经落库：本调用返回 `Err`，但下一步 `check`
     /// 会看到 `Allow { remaining: 0 }`（额度确实耗尽），由调用方据此拒绝。
-    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleDecision, StoreError> {
+    pub fn record_failure(&self, key: &str, now: u64) -> Result<ThrottleOutcome, StoreError> {
         let count = self.store.record_failure(key, now, self.config.window_secs)?;
         if count >= self.config.threshold {
             let until = now.saturating_add(self.config.ban_secs);
             self.store.ban(key, until)?;
-            return Ok(ThrottleDecision::Banned { until });
+            return Ok(ThrottleOutcome::Banned { until });
         }
-        Ok(ThrottleDecision::Allow {
+        Ok(ThrottleOutcome::Allow {
             remaining: self.remaining(count),
         })
     }
@@ -162,7 +203,7 @@ mod tests {
         }
         assert_eq!(
             t.record_failure("ip:a", NOW).unwrap(),
-            ThrottleDecision::Allow { remaining: 4 },
+            ThrottleOutcome::Allow { remaining: 4 },
             "check 不该计入失败"
         );
     }

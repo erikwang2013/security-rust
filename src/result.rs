@@ -29,6 +29,18 @@ pub enum AttackCategory {
     File,
 }
 
+/// 小写的分类标签，供日志直接打印。不是处置结论，故不跟 [`Severity`] 的大写风格。
+impl fmt::Display for AttackCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AttackCategory::Injection => write!(f, "injection"),
+            AttackCategory::Protocol => write!(f, "protocol"),
+            AttackCategory::Data => write!(f, "data"),
+            AttackCategory::File => write!(f, "file"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectionResult {
     pub attack_type: String,
@@ -67,6 +79,14 @@ mod tests {
         assert_eq!(Severity::Critical, Severity::Critical);
         assert_ne!(Severity::Critical, Severity::High);
         assert_ne!(Severity::Medium, Severity::Low);
+    }
+
+    #[test]
+    fn attack_category_display_tags() {
+        assert_eq!(AttackCategory::Injection.to_string(), "injection");
+        assert_eq!(AttackCategory::Protocol.to_string(), "protocol");
+        assert_eq!(AttackCategory::Data.to_string(), "data");
+        assert_eq!(AttackCategory::File.to_string(), "file");
     }
 
     #[test]

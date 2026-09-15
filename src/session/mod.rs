@@ -14,7 +14,13 @@ pub use store::{LoginPoint, MemoryStore, SessionRecord, SessionStore};
 pub struct RequestContext<'a> {
     /// 调用方签发的 token 值。`verify` 中为空 ⇒ `TokenUnknown`。
     pub token: &'a str,
-    /// 用户标识。异地登录历史按它聚合，而非按 token。
+    /// 用户标识。**仅 `bind` 使用，`verify` 完全忽略它**：每请求校验的身份
+    /// 一律取自服务端 [`SessionRecord`]（异地历史按 `record.subject` 聚合），
+    /// 请求方提供的 subject 不可信。
+    ///
+    /// 因此中间件里传 `subject: ""` 是合法的 —— `verify` 不看这个字段
+    /// （`bind` 才要求非空）。也正因如此，**绝不要**把请求头里的用户标识
+    /// 填进来当身份：现在它进不了判定，将来重构也未必。
     pub subject: &'a str,
     /// 客户端指纹（如 IP + User-Agent 的规范化拼接），登录时绑定。
     pub fingerprint: &'a str,
@@ -74,6 +80,28 @@ impl SessionThreat {
     }
 }
 
+/// 人类可读的威胁描述，供日志直接打印。
+impl std::fmt::Display for SessionThreat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionThreat::TokenUnknown => write!(f, "unknown token"),
+            SessionThreat::TokenExpired => write!(f, "token expired"),
+            SessionThreat::TokenRevoked => write!(f, "token revoked"),
+            SessionThreat::FingerprintMismatch => write!(f, "fingerprint mismatch"),
+            SessionThreat::SignatureInvalid => write!(f, "signature invalid"),
+            SessionThreat::SignatureMissing => write!(f, "signature missing"),
+            SessionThreat::SignatureUnexpected => write!(f, "unexpected signature"),
+            SessionThreat::LocationChanged => write!(f, "location changed"),
+            // km/h 是这条判定最有用的信息，不能让它只存在于 Debug 形状里
+            SessionThreat::ImpossibleTravel { kmh } => {
+                write!(f, "impossible travel ({kmh:.0} km/h)")
+            }
+            SessionThreat::TimestampSkew => write!(f, "timestamp skew"),
+            SessionThreat::StoreUnavailable => write!(f, "session store unavailable"),
+        }
+    }
+}
+
 /// 严格度递增（声明顺序即 Ord 顺序），取最严格者作为最终决策。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Decision {
@@ -82,21 +110,35 @@ pub enum Decision {
     Block,
 }
 
+/// 状态标签，与 [`Severity`] 同样用大写 —— 这三种是处置结论，不是描述。
+impl std::fmt::Display for Decision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Decision::Allow => write!(f, "ALLOW"),
+            Decision::Challenge => write!(f, "CHALLENGE"),
+            Decision::Block => write!(f, "BLOCK"),
+        }
+    }
+}
+
 /// 一次校验的结论。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionVerdict {
     pub decision: Decision,
-    /// 无威胁时为 `Severity::Low` 占位 —— 此时该字段无意义，调用方应只读 `decision`。
-    pub severity: Severity,
+    /// 最严重威胁的严重度；**无威胁（放行）时为 `None`**。
+    ///
+    /// 不拿 `Severity::Low` 占位：占位值在日志里跟「发现了一条低危」长得一模一样，
+    /// 一条完全放行的正常请求会被读成有发现。没有威胁就是没有严重度，由类型说明。
+    pub severity: Option<Severity>,
     pub threats: Vec<SessionThreat>,
 }
 
 impl SessionVerdict {
-    /// 无任何威胁：放行。
+    /// 无任何威胁：放行，`severity` 为 `None`。
     pub fn allow() -> Self {
         Self {
             decision: Decision::Allow,
-            severity: Severity::Low,
+            severity: None,
             threats: Vec::new(),
         }
     }
@@ -106,7 +148,7 @@ impl SessionVerdict {
         Self::from_threats(vec![threat])
     }
 
-    /// 由威胁列表聚合：decision 取最严格者，severity 取最严重者。
+    /// 由威胁列表聚合：decision 取最严格者，severity 取最严重者（空列表 ⇒ `None`）。
     ///
     /// `Severity` 不提供任何序（派生 `Ord` 会按声明顺序 Critical < Low，与严重程度相反），
     /// 因此严重度比较一律走显式的 `severity_rank`；decision 的比较则可用 `Decision` 的 `Ord`。
@@ -119,11 +161,12 @@ impl SessionVerdict {
             .map(SessionThreat::decision)
             .max()
             .unwrap_or(Decision::Block);
+        // 走到这里 threats 必非空，`max_by_key` 必为 `Some`；用 `Option` 承接而不是
+        // 补一个不可能失败的 `unwrap_or` 占位值，正是为了让 `None` 只表示「无威胁」
         let severity = threats
             .iter()
             .map(SessionThreat::severity)
-            .max_by_key(severity_rank)
-            .unwrap_or(Severity::Low);
+            .max_by_key(severity_rank);
         Self {
             decision,
             severity,
@@ -252,6 +295,7 @@ mod tests {
         assert_eq!(v.decision, Decision::Allow);
         assert!(v.is_allowed());
         assert!(v.threats.is_empty());
+        assert_eq!(v.severity, None, "放行时没有发现，就没有严重度");
     }
 
     #[test]
@@ -279,7 +323,7 @@ mod tests {
             SessionThreat::FingerprintMismatch, // Critical
             SessionThreat::LocationChanged,     // Medium
         ]);
-        assert_eq!(v.severity, Severity::Critical);
+        assert_eq!(v.severity, Some(Severity::Critical));
         assert_eq!(v.decision, Decision::Block);
     }
 
@@ -287,7 +331,22 @@ mod tests {
     fn single_threat_maps_correctly() {
         let v = SessionVerdict::single(SessionThreat::TokenExpired);
         assert_eq!(v.decision, Decision::Block);
-        assert_eq!(v.severity, Severity::Low);
+        assert_eq!(v.severity, Some(Severity::Low));
+    }
+
+    #[test]
+    fn display_is_human_readable_not_debug() {
+        assert_eq!(Decision::Challenge.to_string(), "CHALLENGE");
+        assert_eq!(SessionThreat::TokenExpired.to_string(), "token expired");
+        assert_eq!(
+            SessionThreat::StoreUnavailable.to_string(),
+            "session store unavailable"
+        );
+        // km/h 必须真的出现在输出里，而不是只留在 Debug 形状的内层
+        assert_eq!(
+            SessionThreat::ImpossibleTravel { kmh: 11_205.4 }.to_string(),
+            "impossible travel (11205 km/h)"
+        );
     }
 
     #[test]

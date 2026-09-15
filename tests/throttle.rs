@@ -7,7 +7,7 @@
 
 use security_rust::session::StoreError;
 use security_rust::throttle::{
-    MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleStore,
+    MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome, ThrottleStore,
 };
 
 const NOW: u64 = 1_000_000;
@@ -110,7 +110,6 @@ impl ThrottleStore for BanWriteFailsStore {
     }
 }
 
-
 // ── 封禁路径 ──────────────────────────────────────────────────────────
 
 #[test]
@@ -118,16 +117,18 @@ fn threshold_failures_ban_on_the_last_one() {
     let t = throttle(3, 60, 900);
     assert_eq!(
         t.record_failure("ip:1.2.3.4", NOW).unwrap(),
-        ThrottleDecision::Allow { remaining: 2 }
+        ThrottleOutcome::Allow { remaining: 2 }
     );
     assert_eq!(
         t.record_failure("ip:1.2.3.4", NOW + 1).unwrap(),
-        ThrottleDecision::Allow { remaining: 1 }
+        ThrottleOutcome::Allow { remaining: 1 }
     );
     // 第 threshold 次失败即封禁：返回 Banned 而不是 Allow { remaining: 0 }
     assert_eq!(
         t.record_failure("ip:1.2.3.4", NOW + 2).unwrap(),
-        ThrottleDecision::Banned { until: NOW + 2 + 900 }
+        ThrottleOutcome::Banned {
+            until: NOW + 2 + 900
+        }
     );
 }
 
@@ -164,7 +165,7 @@ fn further_failures_after_ban_extend_nothing_but_stay_banned() {
     let again = t.record_failure("ip:a", NOW + 10).unwrap();
     assert_eq!(
         again,
-        ThrottleDecision::Banned {
+        ThrottleOutcome::Banned {
             until: NOW + 10 + 900
         },
         "封禁中继续失败按新时刻续封"
@@ -184,23 +185,23 @@ fn failures_outside_the_window_do_not_count() {
     let t = throttle(3, 60, 900);
     assert_eq!(
         t.record_failure("acct:u1", NOW).unwrap(),
-        ThrottleDecision::Allow { remaining: 2 }
+        ThrottleOutcome::Allow { remaining: 2 }
     );
     // 恰好 60 秒后：上一条正好滑出（保留条件是 t > now - window），计数仍为 1
     assert_eq!(
         t.record_failure("acct:u1", NOW + 60).unwrap(),
-        ThrottleDecision::Allow { remaining: 2 },
+        ThrottleOutcome::Allow { remaining: 2 },
         "窗口外的失败必须滑出"
     );
     // 窗口内再失败一次则正常累计
     assert_eq!(
         t.record_failure("acct:u1", NOW + 90).unwrap(),
-        ThrottleDecision::Allow { remaining: 1 }
+        ThrottleOutcome::Allow { remaining: 1 }
     );
     // 第三次仍落在 NOW+60 那条的 60 秒窗口内（119 - 60 = 59 < 60）⇒ 累计到 3，封禁
     assert_eq!(
         t.record_failure("acct:u1", NOW + 119).unwrap(),
-        ThrottleDecision::Banned {
+        ThrottleOutcome::Banned {
             until: NOW + 119 + 900
         }
     );
@@ -213,7 +214,7 @@ fn slow_bruteforce_never_trips_the_threshold() {
     for i in 0..20 {
         let d = t.record_failure("acct:slow", NOW + i * 61).unwrap();
         assert!(
-            matches!(d, ThrottleDecision::Allow { .. }),
+            matches!(d, ThrottleOutcome::Allow { .. }),
             "第 {i} 次不该封禁，got {d:?}"
         );
     }
@@ -229,7 +230,7 @@ fn success_clears_failures_but_keeps_the_ban() {
     t.record_failure("ip:nat", NOW).unwrap();
     assert_eq!(
         t.record_failure("ip:nat", NOW).unwrap(),
-        ThrottleDecision::Banned { until: NOW + 30 }
+        ThrottleOutcome::Banned { until: NOW + 30 }
     );
     // 共享桶（NAT 后面的另一个人）认证成功：计数归零，封禁照旧
     t.record_success("ip:nat").unwrap();
@@ -272,9 +273,7 @@ fn keys_are_independent() {
     t.record_failure("ip:b", NOW).unwrap();
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap(),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        ThrottleOutcome::Banned { until: NOW + 900 }
     );
     assert_eq!(
         t.check("ip:b", NOW),
@@ -301,7 +300,10 @@ fn check_is_unavailable_not_banned_when_store_fails() {
         ThrottleDecision::Unavailable,
         "后端故障必须暴露为 Unavailable，而不是 Banned"
     );
-    assert_ne!(t.check("ip:1.2.3.4", NOW), ThrottleDecision::Banned { until: 0 });
+    assert_ne!(
+        t.check("ip:1.2.3.4", NOW),
+        ThrottleDecision::Banned { until: 0 }
+    );
 }
 
 #[test]
@@ -337,7 +339,7 @@ fn ban_write_failure_leaves_the_key_at_zero_budget() {
     );
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap(),
-        ThrottleDecision::Allow { remaining: 1 }
+        ThrottleOutcome::Allow { remaining: 1 }
     );
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap_err(),
@@ -394,15 +396,11 @@ fn threshold_one_bans_on_first_failure() {
     let t = throttle(1, 60, 900);
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap(),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        ThrottleOutcome::Banned { until: NOW + 900 }
     );
     assert_eq!(
         t.check("ip:a", NOW),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        ThrottleDecision::Banned { until: NOW + 900 }
     );
 }
 
@@ -411,7 +409,7 @@ fn zero_ban_secs_unbans_immediately() {
     let t = throttle(1, 60, 0);
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap(),
-        ThrottleDecision::Banned { until: NOW },
+        ThrottleOutcome::Banned { until: NOW },
         "ban_secs = 0 时解封时刻就是当下"
     );
     assert_eq!(
@@ -427,9 +425,7 @@ fn threshold_zero_bans_on_first_failure() {
     let t = throttle(0, 60, 900);
     assert_eq!(
         t.record_failure("ip:a", NOW).unwrap(),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        ThrottleOutcome::Banned { until: NOW + 900 }
     );
 }
 
@@ -461,19 +457,14 @@ fn expired_ban_with_failures_still_in_window_reports_zero_remaining() {
 fn empty_key_behaves_like_any_other_key() {
     // 空 key 不做特殊处理，也不 panic；构造非空且不重名的 key 是调用方的责任
     let t = throttle(2, 60, 900);
+    assert_eq!(t.check("", NOW), ThrottleDecision::Allow { remaining: 2 });
     assert_eq!(
-        t.check("", NOW),
-        ThrottleDecision::Allow { remaining: 2 }
+        t.record_failure("", NOW).unwrap(),
+        ThrottleOutcome::Allow { remaining: 1 }
     );
     assert_eq!(
         t.record_failure("", NOW).unwrap(),
-        ThrottleDecision::Allow { remaining: 1 }
-    );
-    assert_eq!(
-        t.record_failure("", NOW).unwrap(),
-        ThrottleDecision::Banned {
-            until: NOW + 900
-        }
+        ThrottleOutcome::Banned { until: NOW + 900 }
     );
     assert_eq!(
         t.check("ip:a", NOW),

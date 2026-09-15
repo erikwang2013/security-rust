@@ -10,7 +10,7 @@
 //!
 //! 1. [`Scanner::scan`] —— 32 个无状态检测器扫原始 payload
 //! 2. [`Scanner::assess`] —— 命中聚合成 `RiskAssessment`，`>= High` 直接拒
-//! 3. [`Throttle::check`] —— `ip:` / `acct:` 两个维度查限流与封禁
+//! 3. [`Throttle::check_any`] —— `ip:` / `acct:` 两个维度一次查完限流与封禁
 //! 4. `record_failure` / `record_success` —— 认证结果记账
 //! 5. [`SessionGuard::verify`] —— token / 指纹 / 位置绑定校验，按 `Decision` 三档处置
 //!
@@ -22,8 +22,8 @@
 
 use security_rust::{
     Decision, MemoryStore, MemoryThrottleStore, RequestContext, RiskAssessment, RiskLevel, Scanner,
-    SessionConfig, SessionGuard, SessionThreat, SessionVerdict, Throttle, ThrottleConfig,
-    ThrottleDecision,
+    SessionConfig, SessionGuard, SessionVerdict, Throttle, ThrottleConfig, ThrottleDecision,
+    ThrottleOutcome,
 };
 
 /// 固定时钟起点。递增的常量代替真实时钟，保证输出可复现。
@@ -46,7 +46,7 @@ enum Action {
 /// 一条待处理的请求。所有字段都是字面量，因此可以整表静态构造。
 struct Request<'a> {
     /// 便于阅读输出
-    label: &'a str,
+    title: &'a str,
     ip: &'a str,
     account: &'a str,
     payload: &'a str,
@@ -144,7 +144,7 @@ fn handle(
     guard: &SessionGuard<MemoryStore>,
     now: u64,
 ) -> Action {
-    println!("\n── {} ── t={now}", req.label);
+    println!("\n── {} ── t={now}", req.title);
 
     // ── 1) 字符串层：32 个无状态检测器 ────────────────────────────────
     let hits = scanner.scan(req.payload);
@@ -153,7 +153,7 @@ fn handle(
     } else {
         for h in &hits {
             println!(
-                "  scan     : [{:?}] {} · {} · offset={} · 命中 {:?}",
+                "  scan     : [{}] {} · {} · offset={} · 命中 {:?}",
                 h.category, h.attack_type, h.severity, h.offset, h.matched_pattern
             );
         }
@@ -167,9 +167,11 @@ fn handle(
     }
 
     // ── 3) 限流闸门 ─────────────────────────────────────────────────
+    // 两个维度（来源 IP + 目标账户）一次查完，合并规则由 `check_any` 定义：
+    // 任一被封即封，否则取最严格的一档。调用方不再自己发明谁压谁。
     let ip_key = format!("ip:{}", req.ip);
     let acct_key = format!("acct:{}", req.account);
-    match check_throttle(throttle, &ip_key, &acct_key, now) {
+    match throttle.check_any(&[ip_key.as_str(), acct_key.as_str()], now) {
         ThrottleDecision::Banned { until } => {
             println!(
                 "  throttle : BANNED · {ip_key} / {acct_key} · 解封于 {until}（还剩 {}s）",
@@ -197,15 +199,14 @@ fn handle(
         println!("  auth     : 密码正确 → 清空失败计数（注意：不清封禁）");
     } else {
         for key in [&ip_key, &acct_key] {
+            // `record_failure` 返回 `Result<ThrottleOutcome, _>`：两个可达状态 + 一个错误，
+            // 没有 `Unavailable` 那个永远走不到的分支。
             match throttle.record_failure(key, now) {
-                Ok(ThrottleDecision::Banned { until }) => {
+                Ok(ThrottleOutcome::Banned { until }) => {
                     println!("  auth     : 密码错误 · {key} 达到阈值 → 封禁至 {until}");
                 }
-                Ok(ThrottleDecision::Allow { remaining }) => {
+                Ok(ThrottleOutcome::Allow { remaining }) => {
                     println!("  auth     : 密码错误 · {key} · 剩余额度 {remaining}");
-                }
-                Ok(ThrottleDecision::Unavailable) => {
-                    println!("  auth     : 密码错误 · {key} · store 不可用，未记账");
                 }
                 Err(e) => println!("  auth     : 密码错误 · {key} · 记账失败: {e}"),
             }
@@ -225,37 +226,6 @@ fn handle(
     }
 }
 
-/// 限流按两个维度同时启用 —— `ip:` 挡来源、`acct:` 挡目标。
-///
-/// [`Throttle::check`] 一次只吃一个 key，也不替调用方定义「两个 key 谁优先」，
-/// 所以合并规则由调用方定。这里取最严格的一档：任一被封即封，否则取更小的剩余额度。
-fn check_throttle(
-    throttle: &Throttle<MemoryThrottleStore>,
-    ip_key: &str,
-    acct_key: &str,
-    now: u64,
-) -> ThrottleDecision {
-    let mut budget: Option<u32> = None;
-    let mut unavailable = false;
-    for key in [ip_key, acct_key] {
-        match throttle.check(key, now) {
-            ThrottleDecision::Banned { until } => return ThrottleDecision::Banned { until },
-            ThrottleDecision::Unavailable => unavailable = true,
-            ThrottleDecision::Allow { remaining } => {
-                budget = Some(budget.map_or(remaining, |b| b.min(remaining)));
-            }
-        }
-    }
-    if unavailable {
-        ThrottleDecision::Unavailable
-    } else {
-        // 取不到额度就报 0 —— 报满额会误导调用方写进 X-RateLimit 响应头
-        ThrottleDecision::Allow {
-            remaining: budget.unwrap_or(0),
-        }
-    }
-}
-
 /// 示例脚本：固定时间、固定输入。
 fn requests() -> Vec<Request<'static>> {
     let alice = |token: &'static str, fp: &'static str, loc: &'static str, at: u64| RequestContext {
@@ -270,7 +240,7 @@ fn requests() -> Vec<Request<'static>> {
 
     vec![
         Request {
-            label: "REQ-1 正常请求",
+            title: "REQ-1 正常请求",
             ip: "10.0.0.1",
             account: "alice",
             payload: "/products/running-shoes",
@@ -278,7 +248,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-alice-1", FP_ALICE, "CN-BJ", T0 + 1),
         },
         Request {
-            label: "REQ-2 SQL 注入",
+            title: "REQ-2 SQL 注入",
             ip: "198.51.100.4",
             account: "alice",
             payload: "/search?q=' OR 1=1 --",
@@ -286,7 +256,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-alice-1", FP_ALICE, "CN-BJ", T0 + 2),
         },
         Request {
-            label: "REQ-3 XSS",
+            title: "REQ-3 XSS",
             ip: "198.51.100.5",
             account: "alice",
             payload: "/comment?body=<script>alert(document.cookie)</script>",
@@ -294,7 +264,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-alice-1", FP_ALICE, "CN-BJ", T0 + 3),
         },
         Request {
-            label: "REQ-4 异地登录（同指纹、同 token，位置变了）",
+            title: "REQ-4 异地登录（同指纹、同 token，位置变了）",
             ip: "10.0.0.1",
             account: "alice",
             payload: "/account",
@@ -302,7 +272,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-alice-1", FP_ALICE, "US-NY", T0 + 4),
         },
         Request {
-            label: "REQ-5 会话劫持（token 被盗，指纹不符）",
+            title: "REQ-5 会话劫持（token 被盗，指纹不符）",
             ip: "203.0.113.9",
             account: "alice",
             payload: "/account",
@@ -310,7 +280,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-alice-1", "ip=203.0.113.9|ua=curl/8", "CN-BJ", T0 + 5),
         },
         Request {
-            label: "REQ-6a 暴力破解 · 第 1 次失败",
+            title: "REQ-6a 暴力破解 · 第 1 次失败",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -318,7 +288,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-forged", FP_ALICE, "CN-BJ", T0 + 10),
         },
         Request {
-            label: "REQ-6b 暴力破解 · 第 2 次失败",
+            title: "REQ-6b 暴力破解 · 第 2 次失败",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -326,7 +296,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-forged", FP_ALICE, "CN-BJ", T0 + 11),
         },
         Request {
-            label: "REQ-6c 暴力破解 · 第 3 次失败",
+            title: "REQ-6c 暴力破解 · 第 3 次失败",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -334,7 +304,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-forged", FP_ALICE, "CN-BJ", T0 + 12),
         },
         Request {
-            label: "REQ-6d 暴力破解 · 第 4 次失败",
+            title: "REQ-6d 暴力破解 · 第 4 次失败",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -342,7 +312,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-forged", FP_ALICE, "CN-BJ", T0 + 13),
         },
         Request {
-            label: "REQ-6e 暴力破解 · 第 5 次失败（达到阈值）",
+            title: "REQ-6e 暴力破解 · 第 5 次失败（达到阈值）",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -350,7 +320,7 @@ fn requests() -> Vec<Request<'static>> {
             ctx: alice("tok-forged", FP_ALICE, "CN-BJ", T0 + 14),
         },
         Request {
-            label: "REQ-7 拿到正确密码也进不来（封禁未到期）",
+            title: "REQ-7 拿到正确密码也进不来（封禁未到期）",
             ip: "203.0.113.7",
             account: "mallory",
             payload: "/login",
@@ -360,37 +330,30 @@ fn requests() -> Vec<Request<'static>> {
     ]
 }
 
-/// `Decision` 没有 `Display`，示例自备标签。
-fn decision_label(d: Decision) -> &'static str {
-    match d {
-        Decision::Allow => "ALLOW",
-        Decision::Challenge => "CHALLENGE",
-        Decision::Block => "BLOCK",
-    }
-}
-
-/// `SessionThreat` 没有 `Display`，示例自备标签。
-fn threat_label(t: &SessionThreat) -> String {
-    match t {
-        SessionThreat::ImpossibleTravel { kmh } => format!("ImpossibleTravel({kmh:.0} km/h)"),
-        other => format!("{other:?}"),
-    }
-}
-
 fn threat_list(v: &SessionVerdict) -> String {
     if v.threats.is_empty() {
         return "无威胁".into();
     }
-    v.threats.iter().map(threat_label).collect::<Vec<_>>().join(", ")
+    v.threats
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
+/// `Decision` / `SessionThreat` 都实现了 `Display`，日志层直接打印，不必自备标签表。
+///
+/// `severity` 是 `Option`：放行时**没有** severity 字段可打。换成占位的 `LOW`，
+/// 日志里就跟「发现一条低危」一模一样 —— 一条全放行的正常请求被读成有发现。
 fn describe(v: &SessionVerdict) -> String {
-    format!(
-        "{} · severity={} · threats=[{}]",
-        decision_label(v.decision),
-        v.severity,
-        threat_list(v)
-    )
+    match &v.severity {
+        None => format!("{} · threats=[{}]", v.decision, threat_list(v)),
+        Some(severity) => format!(
+            "{} · severity={severity} · threats=[{}]",
+            v.decision,
+            threat_list(v)
+        ),
+    }
 }
 
 fn describe_risk(r: &RiskAssessment) -> String {

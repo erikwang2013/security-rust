@@ -19,7 +19,9 @@ pub use session::{
     Decision, LoginPoint, MemoryStore, RequestContext, SessionConfig, SessionError, SessionGuard,
     SessionRecord, SessionStore, SessionThreat, SessionVerdict, StoreError,
 };
-pub use throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleStore};
+pub use throttle::{
+    MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome, ThrottleStore,
+};
 
 pub trait Detector: Send + Sync {
     fn name(&self) -> &'static str;

@@ -1,5 +1,7 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
+use std::fmt;
+
 pub mod guard;
 pub mod store;
 
@@ -50,7 +52,41 @@ pub enum ThrottleDecision {
     ///
     /// 这条「不 fail-closed」是写死的设计，不是漏写的兜底：`Throttle::check` 里
     /// 只把 `Err` 映射到本变体，绝不映射到 `Banned`。
+    ///
+    /// 只由 [`guard::Throttle::check`] / [`guard::Throttle::check_any`] 产生。
+    /// [`guard::Throttle::record_failure`] **没有这个变体**（它返回
+    /// [`ThrottleOutcome`]，故障走 `Err`），所以调用方不必为它写死分支。
     Unavailable,
+}
+
+/// 状态标签，与 [`Severity`](crate::Severity) 同样用大写。
+impl fmt::Display for ThrottleDecision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ThrottleDecision::Allow { .. } => write!(f, "ALLOW"),
+            ThrottleDecision::Banned { .. } => write!(f, "BANNED"),
+            ThrottleDecision::Unavailable => write!(f, "UNAVAILABLE"),
+        }
+    }
+}
+
+/// `record_failure` 的结果。与 `check` 的 `ThrottleDecision` 不同，
+/// 这里不存在 `Unavailable` —— 存储故障走 `Err` 返回，不混在正常结果里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThrottleOutcome {
+    /// 未达阈值：本次失败已记下，`remaining` 是窗口内剩余可失败次数。
+    Allow { remaining: u32 },
+    /// 本次失败达到阈值，已写入封禁；`until` 是解封时刻（unix 秒）。
+    Banned { until: u64 },
+}
+
+impl fmt::Display for ThrottleOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ThrottleOutcome::Allow { .. } => write!(f, "ALLOW"),
+            ThrottleOutcome::Banned { .. } => write!(f, "BANNED"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -63,5 +99,14 @@ mod tests {
         assert_eq!(c.threshold, 5, "got {:?}", c);
         assert_eq!(c.window_secs, 60, "got {:?}", c);
         assert_eq!(c.ban_secs, 900, "got {:?}", c);
+    }
+
+    #[test]
+    fn decision_and_outcome_display_uppercase() {
+        assert_eq!(ThrottleDecision::Allow { remaining: 3 }.to_string(), "ALLOW");
+        assert_eq!(ThrottleDecision::Banned { until: 7 }.to_string(), "BANNED");
+        assert_eq!(ThrottleDecision::Unavailable.to_string(), "UNAVAILABLE");
+        assert_eq!(ThrottleOutcome::Allow { remaining: 3 }.to_string(), "ALLOW");
+        assert_eq!(ThrottleOutcome::Banned { until: 7 }.to_string(), "BANNED");
     }
 }

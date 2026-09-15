@@ -116,7 +116,7 @@ fn verify_unknown_token_blocks() {
     let v = g.verify(&ctx("ghost", "u1", FP), NOW);
     assert_eq!(v.decision, Decision::Block);
     assert_eq!(v.threats, vec![SessionThreat::TokenUnknown]);
-    assert_eq!(v.severity, Severity::Critical);
+    assert_eq!(v.severity, Some(Severity::Critical));
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn verify_expired_token_blocks_with_low_severity() {
     let v = g.verify(&ctx("t1", "u1", FP), NOW + 3_601);
     assert_eq!(v.decision, Decision::Block);
     assert_eq!(v.threats, vec![SessionThreat::TokenExpired]);
-    assert_eq!(v.severity, Severity::Low, "过期是例行情况，非攻击");
+    assert_eq!(v.severity, Some(Severity::Low), "过期是例行情况，非攻击");
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn verify_valid_request_is_allowed() {
     let v = g.verify(&ctx("t1", "u1", FP), NOW + 10);
     assert!(v.is_allowed(), "误报: {:?}", v.threats);
     assert!(v.threats.is_empty());
-    assert_eq!(v.severity, Severity::Low);
+    assert_eq!(v.severity, None, "放行时不该有 severity（更不该拿 LOW 占位）");
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn verify_fingerprint_mismatch_is_hijack_block() {
     g.bind(&ctx("t1", "u1", FP), NOW).unwrap();
     let v = g.verify(&ctx("t1", "u1", "fp2"), NOW + 10);
     assert_eq!(v.decision, Decision::Block);
-    assert_eq!(v.severity, Severity::Critical);
+    assert_eq!(v.severity, Some(Severity::Critical));
     assert_eq!(v.threats, vec![SessionThreat::FingerprintMismatch]);
 }
 
@@ -244,7 +244,7 @@ fn verify_signature_unexpected_challenges() {
     let v = g.verify(&c, NOW + 10);
     assert_eq!(v.threats, vec![SessionThreat::SignatureUnexpected]);
     assert_eq!(v.decision, Decision::Challenge);
-    assert_eq!(v.severity, Severity::Medium);
+    assert_eq!(v.severity, Some(Severity::Medium));
 }
 
 #[test]
@@ -371,7 +371,7 @@ fn verify_multiple_threats_accumulate() {
     assert!(v.threats.contains(&SessionThreat::LocationChanged));
     assert!(v.threats.contains(&SessionThreat::TimestampSkew));
     assert_eq!(v.decision, Decision::Block, "Block 压过 Challenge");
-    assert_eq!(v.severity, Severity::Critical);
+    assert_eq!(v.severity, Some(Severity::Critical));
 }
 
 // ── fail-closed ─────────────────────────────────────────────
