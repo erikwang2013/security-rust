@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Critical,
     High,
@@ -98,5 +98,19 @@ mod tests {
         assert!(dbg.contains("xss"));
         assert!(dbg.contains("Injection"));
         assert!(dbg.contains("CRITICAL") || dbg.contains("Critical"));
+    }
+
+    #[test]
+    fn severity_ordering_is_declaration_order() {
+        // 声明顺序：Critical < High < Medium < Low
+        assert!(Severity::Critical < Severity::High);
+        assert!(Severity::High < Severity::Medium);
+        assert!(Severity::Medium < Severity::Low);
+    }
+
+    #[test]
+    fn severity_max_is_the_least_severe() {
+        // 陷阱记录：Ord 顺序与"严重程度"相反，故不能用 max() 取最严重
+        assert_eq!(Severity::Critical.max(Severity::Low), Severity::Low);
     }
 }

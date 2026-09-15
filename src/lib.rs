@@ -8,6 +8,7 @@ pub mod injection;
 pub mod protocol;
 pub mod result;
 pub mod scanner;
+pub mod session;
 
 pub use result::{AttackCategory, DetectionResult, Severity};
 pub use scanner::{Scanner, ScannerBuilder};
