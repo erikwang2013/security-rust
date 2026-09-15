@@ -6,7 +6,17 @@ use std::sync::LazyLock;
 
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?m)^[=+\-@\t\r]").unwrap(),
+        // 行首公式起始符。制表符与回车**不是**公式起始——它们是分隔符：
+        // `"\t\n\r"`（制表符分隔的空行）和 `"a\r\n\r\nb"`（CRLF 空行）
+        // 都曾被这一条判成数据注入。
+        Regex::new(r"(?m)^[=+\-@]").unwrap(),
+        // 字段分隔符之后的 `=`：`admin,=1+1`、`x;=HYPERLINK(...)`、`\t=1`、
+        // `,"=cmd|..."`。两条收紧：
+        //   - 只认 `=`——`,`/`;`/`\t` 后的 `+`/`-`/`@` 在散文里太常见
+        //     （`1, -2, -3`、`me, @alice`）；
+        //   - `=` 后面必须紧跟非空白——`key\t= value` 这种制表符对齐的配置
+        //     不是公式，公式里 `=` 后面是操作数。
+        Regex::new(r#"(?m)[,;\t][ \t]*"?[ \t]*=[^ \t]"#).unwrap(),
         Regex::new(r"(?im)^\s*DDE").unwrap(),
         Regex::new(r"(?im)^\s*cmd\s*\|").unwrap(),
         Regex::new(r"(?im)^\s*@SUM\s*\(").unwrap(),
@@ -42,6 +52,10 @@ mod tests {
             "-2+3",
             "@SUM(1+1)*cmd",
             "\t=1",
+            "列1\t=1",
+            "admin,=1+1",
+            "x;=HYPERLINK(\"http://evil.com\")",
+            ",\"=cmd|' /C calc'!A0\"",
             "DDE;cmd",
             "cmd|' /C calc'!A0",
         ] {
@@ -72,6 +86,17 @@ mod tests {
             "SUM(1+1)",
             "cmd /C calc",
             "not a formula",
+            // 空白字符是分隔符，不是公式起始符
+            "\t\n\r",
+            "a\tb",
+            "列1\t列2\t列3",
+            "hello world",
+            "line one\r\n\r\nline two",
+            "a, b, c",
+            "2024-01-01",
+            // 逗号后的 `+`/`-`/`@` 是散文形态，不认
+            "1, -2, -3",
+            "me, @alice",
         ] {
             assert!(
                 CsvInjectionDetector.detect(input).is_none(),
