@@ -6,7 +6,8 @@ pub mod store;
 
 use crate::Severity;
 
-pub use store::{MemoryStore, SessionStore};
+pub use guard::SessionGuard;
+pub use store::{LoginPoint, MemoryStore, SessionRecord, SessionStore};
 
 /// 一次请求的全部输入，字段由调用方填写。
 #[derive(Debug, Clone)]

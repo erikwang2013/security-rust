@@ -12,6 +12,10 @@ pub mod session;
 
 pub use result::{AttackCategory, DetectionResult, Severity};
 pub use scanner::{Scanner, ScannerBuilder};
+pub use session::{
+    Decision, LoginPoint, MemoryStore, RequestContext, SessionConfig, SessionError, SessionGuard,
+    SessionRecord, SessionStore, SessionThreat, SessionVerdict, StoreError,
+};
 
 pub trait Detector: Send + Sync {
     fn name(&self) -> &'static str;
