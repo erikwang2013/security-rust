@@ -99,6 +99,7 @@ pub enum SessionError {
     EmptyToken,
     EmptySubject,
     EmptyFingerprint,
+    UnknownSession,   // rotate 的旧 token 不存在、已吊销或已过期
     Store(StoreError),
 }
 ```
@@ -137,9 +138,10 @@ pub trait SessionStore: Send + Sync {
 ### MemoryStore
 
 - `Mutex<HashMap<String, SessionRecord>>` + 每 subject 一条**有界**登录历史（默认保留最近 10 条）。
-- **TTL 不做后台线程**（区别于 Go 版 `storage.Memory` 的 `go m.reap()`）：
-  - `get()` 遇到 `expires_at <= now` 直接视为不存在并顺手删除 —— O(1)。
-  - 另提供 `purge_expired(now) -> usize` 供调用方定期清理内存。
+- **TTL 不做后台线程**（区别于 Go 版 `storage.Memory` 的 `go m.reap()`），且**过期判定归 `guard` 而非 store**：
+  - `get()` **原样返回记录，不过滤过期**。原因是 `get` 的签名里没有 `now`，store 无从判断过期；更关键的是，若 `get` 对过期记录返回 `None`，`verify` 就永远无法区分 `TokenExpired` 与 `TokenUnknown`，而这两个威胁在判定表中是独立条目。
+  - 过期由 `guard` 用 `now` 判定（流程第 5 步）。
+  - 内存回收由 `purge_expired(now) -> usize` 负责，供调用方按需调用。
 - `revoke()` 置 `revoked = true` 而不删除记录：这样 `verify` 能区分「已吊销」与「从未存在」。代价是吊销后记录仍占内存，直到自然 TTL 到期。`revoke_subject()` 返回被吊销的会话数。
 
 ## 篡改检测的实现
@@ -187,6 +189,8 @@ impl<S: SessionStore> SessionGuard<S> {
         -> Result<(), SessionError>;
 }
 ```
+
+`rotate` 要求旧 token 存在、未吊销、未过期，**且指纹与本次 `ctx` 相符**（不符返回 `UnknownSession`）。否则等于允许攻击者拿别人的 token 换一个自己的新 token，是提权漏洞。新记录的 `subject` / `location` / `coords` / `signature` 一律以服务端记录为准，不接受 `ctx` 覆盖。
 
 `verify` 返回 `SessionVerdict` 而非 `Result`：认证路径上「拒绝」是正常结果而非错误，强制调用方在类型层面处理每一种拒绝。
 
@@ -288,7 +292,7 @@ guard.revoke_all(&subject)?;        // 改密码 / 踢掉全部设备
 |------|------|
 | `ct_eq` | 相等 / 差一字节 / 长度不同 / 空串 / 长的相同前缀 |
 | `geo` | haversine 已知距离（北京→纽约 ≈ 11000km）、阈值边界、不可能旅行、缺坐标时降级 |
-| `store` | put/get/touch/revoke/revoke_all 计数、过期即不可见、`purge_expired`、登录历史有界 |
+| `store` | put/get/touch/revoke/revoke_all 计数、`get` 原样返回过期记录（不过滤）、`purge_expired`、登录历史有界 |
 | `guard` | **每个威胁单独一个用例**、严格度叠加（Block 压过 Challenge）、severity 取最高 |
 | 错误处理 | store 故障 → `StoreUnavailable` + Block（fail-closed） |
 | 生命周期 | `rotate` 后旧 token 失效、`revoke_all` 后同 subject 全部会话失效 |
