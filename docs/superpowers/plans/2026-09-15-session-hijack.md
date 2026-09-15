@@ -14,16 +14,27 @@
 
 ---
 
-## 对 spec 的两处偏离（实现前须知）
+## 执行结果（计划 vs 实际）
 
-1. **`SessionError` 增加第 5 个变体 `UnknownSession`。** spec 只列了 4 个变体，但 `rotate(old, new, ..)` 在旧 token 不存在时必须能报错，且不能复用 `EmptyToken`（语义不对）。Task 9 实现之。
-2. **spec 的 `MemoryStore::get` 行为已修正**（见 spec 该节）：`get` 原样返回记录不过滤过期，过期判定归 `guard`。否则 `TokenExpired` 与 `TokenUnknown` 无法区分。
+> **本计划已执行完毕。** 下面保留的是执行前的原始计划，本节记录实际落地时与计划的偏离 —— 保留原文是有意的，重写会抹掉「当初打算怎么做」的记录。
+
+| # | 偏离 | 原因 |
+|---|---|---|
+| 1 | **`Severity` 的 `PartialOrd, Ord` 派生被撤销** | 计划 Task 1 Step 1 要求加，但代码审查否决：`Severity` 声明顺序是 `Critical` 在最前，派生 `Ord` 得 `Critical < High < Medium < Low`，**与严重程度相反**，`max()` 会静默取到最不严重者。本模块唯一的需求「一组取最严重」已由显式 `severity_rank()` + `max_by_key` 满足。**结果：`src/result.rs` 零改动**，Task 1 Step 1 的代码块与 File Structure 表该行均已作废 |
+| 2 | **测试布局重构** | 计划把 Task 5–9 的全部测试塞进 `guard.rs` 内联，实测会超 500 行（违反 CLAUDE.md）。改为：`guard.rs` 内联单测只放 `ct_eq` 族与 9 个**需要读私有字段 `g.store`** 的用例（外部 crate 访问不到私有字段）；纯公开 API 的行为测试拆进 `tests/session.rs`（威胁判定 + fail-closed）与 `tests/session_lifecycle.rs`（bind/rotate/revoke）。计划 Task 10 原定的 `tests/session.rs` 因此一分为二 |
+| 3 | **`SessionError` 增加第 5 个变体 `UnknownSession`** | 计划基于的 spec 只列了 4 个变体，但 `rotate(old, new, ..)` 在旧 token 不存在时必须能报错，且不能复用 `EmptyToken`（语义不对） |
+| 4 | **新增威胁变体 `SignatureUnexpected`**（共 11 个） | 计划未定义「登录时无签名基线、本请求却带签名」这个组合；原实现落进 `_ => {}` 被静默吞掉。补为中危 / Challenge |
+| 5 | **新增 `guard.rs` 的 fail-closed 路径** | 审查发现 `if let Ok(history) = self.store.recent_logins(..)` 在存储报错时静默跳过异地判定 —— 与同文件 `bind()` 用 `?`、与 `verify()` 自陈的 fail-closed 原则矛盾，且零测试覆盖。改为上报 `StoreUnavailable` |
+| 6 | **`geo.rs` 新增 `sanitize_coords`** | `f64::clamp` 挡不住 NaN（NaN 与任何值比较恒为 false，原样返回），NaN 坐标可在 `bind` 时污染登录历史、静默关掉该 subject 的异地检测。改为在信任边界校验 |
+| 7 | **恢复 re-export 的时点不同** | 计划 Task 1 Step 4 先加重导出再于 Step 6 注释掉；实际改为一开始就不加，到 Task 10 类型齐全时一次加上，少一次来回 |
+
+计划基于的 spec 中另有一处已就地修正：`MemoryStore::get` 原样返回记录不过滤过期（过期判定归 `guard`），否则 `TokenExpired` 与 `TokenUnknown` 无法区分。
 
 ## File Structure
 
 | 文件 | 职责 | 状态 |
 |---|---|---|
-| `src/result.rs` | `Severity` 增加 `PartialOrd, Ord` 派生 | 改（1 行） |
+| ~~`src/result.rs`~~ | ~~`Severity` 增加 `PartialOrd, Ord` 派生~~ —— **已作废，见「执行结果」#1** | 实际零改动 |
 | `src/lib.rs` | 挂载 `pub mod session;` + re-export | 改 |
 | `src/session/mod.rs` | 共享词汇类型：`Decision` / `SessionThreat` / `SessionVerdict` / `RequestContext` / `SessionConfig` / `StoreError` / `SessionError` | 建 |
 | `src/session/geo.rs` | `haversine_km` / `location_changed` / `impossible_travel`，纯函数无状态 | 建 |
@@ -43,11 +54,18 @@
 - Modify: `src/lib.rs:5-13`
 - Create: `src/session/mod.rs`
 
-- [ ] **Step 1: 给 `Severity` 加序**
+- [ ] **Step 1: ~~给 `Severity` 加序~~ —— 已作废，见「执行结果」#1**
 
-`src/result.rs` 第 5 行，改派生：
+> **本步实际未执行。** 下面的内容保留为原始计划记录。
+>
+> 计划要求给 `Severity` 加 `PartialOrd, Ord`，但审查否决了：声明顺序是 `Critical` 在最前，派生 `Ord` 会得到 `Critical < High < Medium < Low` —— **与严重程度相反**，`max()` 静默取到最不严重者。本模块唯一的需求（一组取最严重）已由 `severity_rank()` + `max_by_key` 满足，不需要 `Ord`。
+>
+> **实际结果**：`src/result.rs` 一行未改；`src/session/mod.rs` 与 `src/session/guard.rs` 中均无任何对 `Severity` 的序比较，只有显式 `severity_rank`。`Decision` 相反 —— 它按严格度递增声明，可以安全用 `Ord`。
+
+~~`src/result.rs` 第 5 行，改派生：~~
 
 ```rust
+// 计划原文，已作废
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Critical,
@@ -56,8 +74,6 @@ pub enum Severity {
     Low,
 }
 ```
-
-**注意**：声明顺序决定 `Ord` 顺序，`Critical` 最小。因此「取最高严重度」不能用 `max()`。为免误用，不依赖 `Ord` 比较 `Severity`，改为在 `mod.rs` 中显式定义排序权重（Task 3 的 `severity_rank`）。这里加 `Ord` 只为让 `Severity` 可排序。
 
 - [ ] **Step 2: 写测试验证派生生效并记录陷阱**
 
@@ -2176,7 +2192,7 @@ Expected: 4 个测试全部 PASS
 - [ ] **Step 5: 全量验证**
 
 Run: `cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings`
-Expected: 全部 PASS，无警告（既有 27 个检测器的测试不受影响）
+Expected: 全部 PASS，无警告（既有检测器的测试不受影响）
 
 - [ ] **Step 6: 提交**
 
@@ -2353,7 +2369,7 @@ git commit -m "docs: 会话安全模块 —— README 与 API 参考"
 cargo build --release && cargo test && cargo clippy --all-targets -- -D warnings
 ```
 
-- 既有 27 个检测器测试全绿（未受影响）
+- 既有检测器测试全绿（未受影响）
 - `session` 模块单测 + 集成测试全绿
 - 依赖表仍只有 `regex`
 - README.md 与 docs/API.md 已更新
