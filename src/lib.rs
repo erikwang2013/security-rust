@@ -1,10 +1,33 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
+//! Rust 编写的攻击检测库：32 个无状态检测器（注入 / 协议 / 数据 / 文件四类）
+//! + 三个有状态模块（会话安全、限流封禁、风险评分）。`[dependencies]` 只有 `regex`。
+//!
+//! ```text
+//!       (o)(o)
+//!    ⌕┬─────────┬!     甲哨 Sentri
+//!     │ · · · · │       只报告，不拦截
+//!     └──┬───┬──┘       32 detectors / 4 categories
+//!       /     \         deps = regex ×1
+//! ```
+//!
+//! 项目宠物 **甲哨 Sentri**：32 片甲是 32 个检测器，左钳的放大镜负责看，右钳的
+//! 告示牌负责报，但两只钳子都不替调用方做决定（唯一的例外是
+//! [`SessionGuard`]）。形象见 [`pet`] 模块。
+//!
+//! ```
+//! use security_rust::Scanner;
+//!
+//! let results = Scanner::default().scan("<script>alert(1)</script>");
+//! assert_eq!(results[0].attack_type, "xss");
+//! ```
+
 use regex::Regex;
 
 pub mod data;
 pub mod file;
 pub mod injection;
+pub mod pet;
 pub mod protocol;
 pub mod result;
 pub mod scanner;

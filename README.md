@@ -6,6 +6,65 @@
 
 Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序列化攻击、文件/敏感数据泄露 4 大类共 32 个检测器；另提供会话安全、限流封禁、风险评分三个有状态安全模块。零外部框架依赖，`[dependencies]` 只有 `regex`。
 
+项目宠物 **甲哨 Sentri**（[`docs/pet.svg`](./docs/pet.svg)）—— 32 片甲片对应 32 个检测器，只报告，不拦截。
+
+---
+
+## 项目宠物：甲哨 Sentri
+
+<img src="./docs/pet.svg" alt="甲哨 Sentri —— security-rust 项目宠物" width="340">
+
+一只举着放大镜与告示牌的哨蟹。人设不是装饰，是把本库的设计画出来了：
+
+| 形象 | 对应设计 |
+|------|---------|
+| 甲壳上 4 行 × 8 片甲片 | 32 个无状态检测器；4 行 = 注入 / 协议 / 数据 / 文件四大类 |
+| 左钳的放大镜 | 负责**看** —— `Detector::detect()` 只做扫描，命中就返回一条证据 |
+| 右钳的告示牌（`已上报`） | 负责**报** —— 返回 `DetectionResult`，不抛异常、不打断调用链 |
+| 钳子从不夹人 | 判定权在调用方；唯一例外是 `SessionGuard`，它是真的会 `Block` |
+| 单片镜 | 审计员的职业病：每条结论都带 `matched_pattern` 与 `offset`，能落到原文位置 |
+| 铭牌上的 `deps: regex ×1` | 零依赖承诺：`[dependencies]` 永远只有 `regex` |
+
+座右铭：**只报告，不拦截。**
+
+形象以 `include_str!` 打进库里（零运行时开销，不用就不链接），ASCII 版可直接打进终端或日志：
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## 项目结构
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              Detector trait（唯一契约）、regex_detect 辅助、crate 文档
+│   ├── scanner.rs          Scanner / ScannerBuilder：默认装配 32 个检测器
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            风险评分：权重累加 + 分档 → RiskAssessment
+│   ├── pet.rs              项目宠物形象（NAME / TAGLINE / ASCII / SVG）
+│   ├── injection/          11 个注入类检测器
+│   ├── protocol/           11 个协议类检测器
+│   ├── data/               7 个数据类检测器
+│   ├── file/               3 个文件类检测器
+│   ├── session/            SessionGuard + SessionStore（guard / store / geo）
+│   └── throttle/           Throttle + ThrottleStore（guard / store）
+├── tests/                  7 个集成测试套件：会话、限流、生命周期、不变量、鲁棒性、端到端、多维限流
+├── examples/
+│   ├── waf.rs              端到端流水线示例（扫描 → 限流 → 会话 → 处置）
+│   └── axum_middleware.rs  axum 中间件接入参考
+├── docs/
+│   ├── API.md              完整 API 参考
+│   ├── OWASP-COVERAGE.md   与 OWASP 各类攻击的覆盖对照
+│   ├── pet.svg             项目宠物形象
+│   ├── diagrams/           架构 / 功能 / 生命周期三张图（SVG）
+│   ├── i18n/               12 语言 README 与 API 文档
+│   └── ...                 打赏码、代码评审与测试报告
+└── Cargo.toml              唯一的运行时依赖：regex
+```
+
 ---
 
 ## 设计思路
@@ -40,38 +99,11 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 
 ## 设计架构
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="./docs/diagrams/architecture.svg" alt="security-rust 架构图：调用方 → 检测层 → 评分层 → 守卫层 → 存储层" width="900">
 
-`session` / `throttle` / `score` 不在这张图里：它们不实现 `Detector`，输入也不是单个字符串。`score` 消费上图的扫描结果，`session` / `throttle` 则各自独立作答（详见下节）。
+五层自上而下：**调用方**（WAF / 网关 / 审计 / CLI）→ **检测层**（`Scanner` 持有 `Vec<Box<dyn Detector>>`，四大类共 32 个）→ **评分层**（`score::assess`）→ **守卫层**（`SessionGuard` / `Throttle`，各自绑定一个 store trait）→ **存储抽象**（内置 `MemoryStore`，Redis 由调用方实现）。
+
+`Detector` trait 是检测层唯一的契约：`fn detect(&self, input: &str) -> Option<DetectionResult>`。`session` / `throttle` / `score` 不实现它 —— 它们要么输入不是单个字符串（token + 指纹 + 位置 + 时间），要么消费的是扫描结果而非原始输入，因此各自独立作答（详见下节）。图中右侧那条红色回传线是本库的边界：**判定结果交回调用方执行**，库自己不碰请求。
 
 ### 模块职责
 
@@ -95,6 +127,10 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 ---
 
 ## 实现功能
+
+<img src="./docs/diagrams/features.svg" alt="security-rust 功能图：注入 11、协议 11、数据 7、文件 3，加三个有状态模块" width="900">
+
+32 个检测器按四大类装配，`Scanner::default()` 零配置全量启用；下表逐个列出各自覆盖的攻击模式与严重度。严重度只描述单条命中的危害，聚合后的整体风险看 `Scanner::assess()`。
 
 ### 注入类攻击（11 个检测器）
 
@@ -150,6 +186,25 @@ Rust 编写的攻击检测库，覆盖注入攻击、协议攻击、数据/序�
 
 ---
 
+## 生命周期
+
+<img src="./docs/diagrams/lifecycle.svg" alt="security-rust 三条生命周期：扫描、会话、限流" width="900">
+
+三条生命周期互相独立，唯一的交汇点是调用方的请求处理函数：
+
+| 生命周期 | 起点 | 终点 | 状态存放 |
+|---------|------|------|---------|
+| **扫描** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | 无状态，每次调用独立 |
+| **会话** | `SessionGuard::bind()` 写 `SessionRecord` | 每请求 `verify()` → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore`（内置 `MemoryStore`） |
+| **限流** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore`（内置 `MemoryThrottleStore`） |
+
+两条容易踩的边界：
+
+- **`remaining == 0` 表示本请求应被拒绝** —— 额度已耗尽，不是「还能再试一次」。要写进 `X-RateLimit-*` 时别写反。
+- **存储故障的处置两边相反**：`SessionGuard` fail-closed（`StoreUnavailable` ⇒ `Block`，绝不放行，否则攻击者诱导故障就能换掉一整类判定）；`Throttle` fail-open（`Unavailable` 交调用方，后端抖动时把全体用户挡在门外是自我 DoS，主闸门 `SessionGuard` 仍在拦）。这是写死的设计，不是漏写的兜底。
+
+---
+
 ## 使用说明
 
 零配置即可使用：
@@ -160,6 +215,15 @@ use security_rust::Scanner;
 let scanner = Scanner::default();
 let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+```
+
+风险评分把命中列表汇成一个等级，避免多条低危信号被静默忽略：
+
+```rust
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+// assessment.level   >= RiskLevel::High
+// assessment.results >= 3
+// assessment.score   — 原始加权分
 ```
 
 完整 API 参考（安装、选择性扫描、自定义配置、风险评分、严重度展示、会话安全、限流与封禁、性能）见 [API 参考](./docs/API.md)。
@@ -226,8 +290,11 @@ let _ = throttle.record_failure(key, now);
 # 构建
 cargo build --release
 
-# 测试（462 个：354 单元 + 108 集成）
+# 测试（494 个：365 单元 + 128 集成 + 1 文档测试）
 cargo test
+
+# 端到端流水线示例（扫描 → 限流 → 会话 → 处置）
+cargo run --example waf
 
 # 代码检查
 cargo clippy -- -D warnings

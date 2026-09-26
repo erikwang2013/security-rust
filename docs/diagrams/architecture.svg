@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 820" width="960" height="820" role="img" aria-labelledby="archTitle archDesc" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <title id="archTitle">security-rust 架构设计</title>
+  <desc id="archDesc">五层：调用方、无状态检测层（Scanner + Detector trait + 四大类 32 个检测器）、无状态评分层、有状态守卫层（SessionGuard / Throttle）、存储抽象层。判定结果回传调用方执行。</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8F7A66"/>
+    </marker>
+    <marker id="arrowDash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#C9B8A6"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="820" fill="#FFFDFB"/>
+  <rect x="10" y="10" width="940" height="800" rx="20" fill="none" stroke="#EADCCC" stroke-width="2"/>
+
+  <!-- 标题 -->
+  <text x="48" y="58" font-size="24" font-weight="700" fill="#1F1B18">security-rust · 架构设计</text>
+  <text x="48" y="84" font-size="13.5" fill="#7A6A5C">无状态扫描 + 有状态守卫：本库只给结论，拒绝与否由调用方执行</text>
+  <line x1="48" y1="102" x2="912" y2="102" stroke="#EFE4D8" stroke-width="1.5"/>
+
+  <!-- ① 调用方 -->
+  <rect x="48" y="120" width="864" height="72" rx="14" fill="#FBF7F2" stroke="#EADCCC"/>
+  <text x="66" y="152" font-size="13" font-weight="700" fill="#7A6A5C">调用方</text>
+  <text x="66" y="172" font-size="11" fill="#7A6A5C">本库不接管</text>
+  <g font-size="13" fill="#1F1B18">
+    <rect x="190" y="136" width="166" height="40" rx="10" fill="#FFFFFF" stroke="#E3D9CE"/>
+    <text x="273" y="161" text-anchor="middle">WAF 规则引擎</text>
+    <rect x="368" y="136" width="166" height="40" rx="10" fill="#FFFFFF" stroke="#E3D9CE"/>
+    <text x="451" y="161" text-anchor="middle">API 网关</text>
+    <rect x="546" y="136" width="166" height="40" rx="10" fill="#FFFFFF" stroke="#E3D9CE"/>
+    <text x="629" y="161" text-anchor="middle">日志审计</text>
+    <rect x="724" y="136" width="166" height="40" rx="10" fill="#FFFFFF" stroke="#E3D9CE"/>
+    <text x="807" y="161" text-anchor="middle">CLI 扫描</text>
+  </g>
+
+  <line x1="480" y1="192" x2="480" y2="208" stroke="#8F7A66" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="494" y="205" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">scan / verify / check</text>
+
+  <!-- ② 检测层 -->
+  <rect x="48" y="216" width="864" height="248" rx="14" fill="#FDF6F3" stroke="#EADCCC"/>
+  <text x="66" y="246" font-size="13" font-weight="700" fill="#7A6A5C">检测层（无状态）</text>
+  <text x="66" y="266" font-size="11" fill="#7A6A5C">32 个检测器全量扫描，不短路</text>
+
+  <rect x="72" y="276" width="300" height="132" rx="12" fill="#FFFFFF" stroke="#CE422B" stroke-width="2"/>
+  <text x="90" y="306" font-size="17" font-weight="700" fill="#B5351F">Scanner</text>
+  <g font-size="12" fill="#4A4038" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="90" y="332">scan(input) -&gt; Vec&lt;DetectionResult&gt;</text>
+    <text x="90" y="354">scan_with(input, &amp;[names])</text>
+    <text x="90" y="376">assess(input) -&gt; RiskAssessment</text>
+  </g>
+  <text x="90" y="398" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">detectors: Vec&lt;Box&lt;dyn Detector&gt;&gt;</text>
+
+  <line x1="372" y1="342" x2="418" y2="342" stroke="#8F7A66" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="382" y="332" font-size="10.5" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">持有</text>
+
+  <rect x="424" y="276" width="270" height="132" rx="12" fill="#FFF6EC" stroke="#8F2A17" stroke-width="2"/>
+  <text x="442" y="304" font-size="14" font-weight="700" fill="#8F2A17">Detector<tspan font-size="11" font-weight="400" fill="#7A6A5C">  trait</tspan></text>
+  <g font-size="11.5" fill="#4A4038" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="442" y="328">fn name(&amp;self) -&gt; &amp;'static str</text>
+    <text x="442" y="350">fn detect(&amp;self, input: &amp;str)</text>
+    <text x="442" y="372">     -&gt; Option&lt;DetectionResult&gt;</text>
+  </g>
+  <text x="442" y="396" font-size="11" fill="#7A6A5C">唯一契约：字符串进，结构化结果出</text>
+
+  <!-- trait 下放到四大类 -->
+  <path d="M559 408 L559 414" stroke="#C9B8A6" stroke-width="1.6"/>
+  <path d="M170 414 L806 414" stroke="#C9B8A6" stroke-width="1.6" stroke-dasharray="5 5"/>
+  <g stroke="#C9B8A6" stroke-width="1.6" marker-end="url(#arrowDash)">
+    <path d="M170 414 L170 420"/>
+    <path d="M382 414 L382 420"/>
+    <path d="M594 414 L594 420"/>
+    <path d="M806 414 L806 420"/>
+  </g>
+
+  <g>
+    <rect x="72" y="420" width="196" height="32" rx="8" fill="#FFFFFF" stroke="#B3261E" stroke-width="1.5"/>
+    <text x="86" y="441" font-size="12.5" font-weight="700" fill="#B3261E" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">injection</text>
+    <text x="254" y="441" font-size="12" fill="#7A6A5C" text-anchor="end">11</text>
+
+    <rect x="284" y="420" width="196" height="32" rx="8" fill="#FFFFFF" stroke="#2D5BE3" stroke-width="1.5"/>
+    <text x="298" y="441" font-size="12.5" font-weight="700" fill="#2D5BE3" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">protocol</text>
+    <text x="466" y="441" font-size="12" fill="#7A6A5C" text-anchor="end">11</text>
+
+    <rect x="496" y="420" width="196" height="32" rx="8" fill="#FFFFFF" stroke="#7C3AED" stroke-width="1.5"/>
+    <text x="510" y="441" font-size="12.5" font-weight="700" fill="#7C3AED" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">data</text>
+    <text x="678" y="441" font-size="12" fill="#7A6A5C" text-anchor="end">7</text>
+
+    <rect x="708" y="420" width="196" height="32" rx="8" fill="#FFFFFF" stroke="#0E9F6E" stroke-width="1.5"/>
+    <text x="722" y="441" font-size="12.5" font-weight="700" fill="#0B7A55" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">file</text>
+    <text x="890" y="441" font-size="12" fill="#7A6A5C" text-anchor="end">3</text>
+  </g>
+
+  <line x1="480" y1="464" x2="480" y2="482" stroke="#8F7A66" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="494" y="479" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Vec&lt;DetectionResult&gt;</text>
+
+  <!-- ③ 评分层 -->
+  <rect x="48" y="488" width="864" height="84" rx="14" fill="#FBF7F2" stroke="#EADCCC"/>
+  <text x="66" y="518" font-size="13" font-weight="700" fill="#7A6A5C">评分层（无状态）</text>
+  <text x="66" y="538" font-size="11" fill="#7A6A5C">多条低危叠加可升级</text>
+  <rect x="210" y="500" width="300" height="60" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+  <g font-size="12" fill="#4A4038" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="226" y="524">score::assess(&amp;[Result])</text>
+    <text x="226" y="546">-&gt; RiskAssessment</text>
+  </g>
+  <rect x="534" y="500" width="378" height="60" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+  <text x="550" y="522" font-size="10.5" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" fill="#7A6A5C">权重 <tspan fill="#B3261E">Critical 100</tspan> · <tspan fill="#BB5B08">High 40</tspan> · <tspan fill="#9F6D00">Medium 15</tspan> · <tspan fill="#188038">Low 5</tspan></text>
+  <text x="550" y="546" font-size="10.5" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" fill="#7A6A5C">分档 ≥40 High · ≥15 Medium · ≥1 Low · 0 None</text>
+
+  <line x1="480" y1="572" x2="480" y2="590" stroke="#8F7A66" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="494" y="587" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">RiskAssessment</text>
+
+  <!-- ④ 守卫层 -->
+  <rect x="48" y="596" width="864" height="152" rx="14" fill="#F5F9FA" stroke="#D5E3E6"/>
+  <text x="66" y="626" font-size="13" font-weight="700" fill="#5C7276">守卫层（有状态）</text>
+  <text x="66" y="646" font-size="11" fill="#5C7276">输入是 token + 指纹 + 位置 + 时间，不是单个字符串 ⇒ 不实现 Detector，不在 Scanner 装配范围内</text>
+
+  <g>
+    <rect x="72" y="656" width="400" height="56" rx="10" fill="#FFFFFF" stroke="#0E7490" stroke-width="2"/>
+    <text x="88" y="682" font-size="13" font-weight="700" fill="#0E7490" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">SessionGuard&lt;S: SessionStore&gt;</text>
+    <rect x="352" y="664" width="104" height="20" rx="10" fill="#FDECEA" stroke="#B3261E"/>
+    <text x="404" y="678" font-size="10.5" text-anchor="middle" fill="#B3261E">fail-closed</text>
+    <text x="88" y="702" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">bind · verify · rotate · revoke_all</text>
+  </g>
+  <g>
+    <rect x="488" y="656" width="400" height="56" rx="10" fill="#FFFFFF" stroke="#B45309" stroke-width="2"/>
+    <text x="504" y="682" font-size="13" font-weight="700" fill="#B45309" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Throttle&lt;S: ThrottleStore&gt;</text>
+    <rect x="768" y="664" width="104" height="20" rx="10" fill="#FEF3E2" stroke="#B45309"/>
+    <text x="820" y="678" font-size="10.5" text-anchor="middle" fill="#B45309">fail-open</text>
+    <text x="504" y="702" font-size="11" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">check_any · record_failure</text>
+  </g>
+
+  <text x="66" y="736" font-size="11" fill="#7A6A5C">存储抽象</text>
+  <g font-size="10.5" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <rect x="140" y="720" width="220" height="24" rx="7" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="250" y="736" text-anchor="middle">SessionStore / ThrottleStore</text>
+    <text x="372" y="737" font-size="13" fill="#7A6A5C">▸</text>
+    <rect x="388" y="720" width="170" height="24" rx="7" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="473" y="736" text-anchor="middle">MemoryStore 内置</text>
+    <text x="570" y="737" font-size="13" fill="#7A6A5C">▸</text>
+    <rect x="586" y="720" width="220" height="24" rx="7" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="696" y="736" text-anchor="middle">Redis 等由调用方实现</text>
+  </g>
+
+  <!-- ⑤ 存储层独立带 -->
+  <rect x="48" y="762" width="864" height="36" rx="12" fill="#FBF7F2" stroke="#EADCCC"/>
+  <text x="66" y="785" font-size="12.5" fill="#7A6A5C">零依赖边界：<tspan font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" fill="#B5351F">[dependencies] = regex ×1</tspan>　·　token 签发、时间、地理位置解析、存储后端全部由调用方提供</text>
+
+  <!-- 判定回传 -->
+  <path d="M912 684 L924 684 L924 160 L914 160" fill="none" stroke="#B3261E" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text x="934" y="400" font-size="11" fill="#B3261E" text-anchor="middle" transform="rotate(90 934 400)">Decision 回传 · 由调用方执行</text>
+</svg>

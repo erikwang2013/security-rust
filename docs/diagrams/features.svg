@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 776" width="960" height="776" role="img" aria-labelledby="featTitle featDesc" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <title id="featTitle">security-rust 功能设计</title>
+  <desc id="featDesc">四大类 32 个无状态检测器（注入 11、协议 11、数据 7、文件 3），每个标注严重度；下方为三个有状态模块：会话安全、限流封禁、风险评分。</desc>
+
+  <rect x="0" y="0" width="960" height="776" fill="#FFFDFB"/>
+  <rect x="10" y="10" width="940" height="756" rx="20" fill="none" stroke="#EADCCC" stroke-width="2"/>
+
+  <text x="48" y="58" font-size="24" font-weight="700" fill="#1F1B18">security-rust · 功能设计</text>
+  <text x="48" y="84" font-size="13.5" fill="#7A6A5C">32 个无状态检测器按四类装配，Scanner::default() 零配置全量启用；三个有状态模块负责字符串扫描够不到的部分</text>
+  <line x1="48" y1="102" x2="912" y2="102" stroke="#EFE4D8" stroke-width="1.5"/>
+
+  <!-- 列 1：注入 -->
+  <g font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <rect x="48" y="118" width="204" height="56" rx="10" fill="#FDECEA" stroke="#B3261E"/>
+    <text x="62" y="142" font-size="14" font-weight="700" fill="#B3261E">injection</text>
+    <text x="238" y="142" font-size="13" fill="#B3261E" text-anchor="end">11</text>
+    <text x="62" y="162" font-size="10.5" fill="#8A4A44" font-family="system-ui, 'Noto Sans CJK SC', sans-serif">输入串里的注入语法</text>
+
+    <g font-size="11.5" fill="#4A4038">
+      <rect x="48" y="186" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="198" r="4.5" fill="#B3261E"/><text x="74" y="202.5">xss</text>
+      <rect x="48" y="213" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="225" r="4.5" fill="#B3261E"/><text x="74" y="229.5">sql_injection</text>
+      <rect x="48" y="240" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="252" r="4.5" fill="#B3261E"/><text x="74" y="256.5">command_injection</text>
+      <rect x="48" y="267" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="279" r="4.5" fill="#B3261E"/><text x="74" y="283.5">nosql_injection</text>
+      <rect x="48" y="294" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="306" r="4.5" fill="#E8710A"/><text x="74" y="310.5">ldap_injection</text>
+      <rect x="48" y="321" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="333" r="4.5" fill="#E8710A"/><text x="74" y="337.5">xpath_injection</text>
+      <rect x="48" y="348" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="360" r="4.5" fill="#B3261E"/><text x="74" y="364.5">jndi_injection</text>
+      <rect x="48" y="375" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="387" r="4.5" fill="#E8710A"/><text x="74" y="391.5">ssi_injection</text>
+      <rect x="48" y="402" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="414" r="4.5" fill="#F9AB00"/><text x="74" y="418.5">graphql_injection</text>
+      <rect x="48" y="429" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="441" r="4.5" fill="#B3261E"/><text x="74" y="445.5">ssti</text>
+      <rect x="48" y="456" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="62" cy="468" r="4.5" fill="#F9AB00"/><text x="74" y="472.5">format_string</text>
+    </g>
+  </g>
+
+  <!-- 列 2：协议 -->
+  <g font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <rect x="268" y="118" width="204" height="56" rx="10" fill="#EAF0FE" stroke="#2D5BE3"/>
+    <text x="282" y="142" font-size="14" font-weight="700" fill="#2D5BE3">protocol</text>
+    <text x="458" y="142" font-size="13" fill="#2D5BE3" text-anchor="end">11</text>
+    <text x="282" y="162" font-size="10.5" fill="#5A6A96" font-family="system-ui, 'Noto Sans CJK SC', sans-serif">协议与请求语义的滥用</text>
+
+    <g font-size="11.5" fill="#4A4038">
+      <rect x="268" y="186" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="198" r="4.5" fill="#B3261E"/><text x="294" y="202.5">ssrf</text>
+      <rect x="268" y="213" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="225" r="4.5" fill="#B3261E"/><text x="294" y="229.5">xxe</text>
+      <rect x="268" y="240" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="252" r="4.5" fill="#E8710A"/><text x="294" y="256.5">header_injection</text>
+      <rect x="268" y="267" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="279" r="4.5" fill="#E8710A"/><text x="294" y="283.5">host_header</text>
+      <rect x="268" y="294" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="306" r="4.5" fill="#E8710A"/><text x="294" y="310.5">request_smuggling</text>
+      <rect x="268" y="321" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="333" r="4.5" fill="#F9AB00"/><text x="294" y="337.5">open_redirect</text>
+      <rect x="268" y="348" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="360" r="4.5" fill="#F9AB00"/><text x="294" y="364.5">cors</text>
+      <rect x="268" y="375" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="387" r="4.5" fill="#E8710A"/><text x="294" y="391.5">websocket</text>
+      <rect x="268" y="402" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="414" r="4.5" fill="#E8710A"/><text x="294" y="418.5">dns_rebinding</text>
+      <rect x="268" y="429" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="441" r="4.5" fill="#B3261E"/><text x="294" y="445.5">log4shell</text>
+      <rect x="268" y="456" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="282" cy="468" r="4.5" fill="#F9AB00"/><text x="294" y="472.5">hpp</text>
+    </g>
+  </g>
+
+  <!-- 列 3：数据 -->
+  <g font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <rect x="488" y="118" width="204" height="56" rx="10" fill="#F3EDFE" stroke="#7C3AED"/>
+    <text x="502" y="142" font-size="14" font-weight="700" fill="#7C3AED">data</text>
+    <text x="678" y="142" font-size="13" fill="#7C3AED" text-anchor="end">7</text>
+    <text x="502" y="162" font-size="10.5" fill="#6E5A93" font-family="system-ui, 'Noto Sans CJK SC', sans-serif">序列化 / 公式 / 头部载荷</text>
+
+    <g font-size="11.5" fill="#4A4038">
+      <rect x="488" y="186" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="198" r="4.5" fill="#B3261E"/><text x="514" y="202.5">deserialization</text>
+      <rect x="488" y="213" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="225" r="4.5" fill="#F9AB00"/><text x="514" y="229.5">csv_injection</text>
+      <rect x="488" y="240" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="252" r="4.5" fill="#F9AB00"/><text x="514" y="256.5">mail_header</text>
+      <rect x="488" y="267" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="279" r="4.5" fill="#E8710A"/><text x="514" y="283.5">jwt_attack</text>
+      <rect x="488" y="294" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="306" r="4.5" fill="#E8710A"/><text x="514" y="310.5">prototype_pollution</text>
+      <rect x="488" y="321" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="333" r="4.5" fill="#E8710A"/><text x="514" y="337.5">formula_injection</text>
+      <rect x="488" y="348" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="502" cy="360" r="4.5" fill="#F9AB00"/><text x="514" y="364.5">redos</text>
+    </g>
+  </g>
+
+  <!-- 列 4：文件 -->
+  <g font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <rect x="708" y="118" width="204" height="56" rx="10" fill="#E8F6F0" stroke="#0E9F6E"/>
+    <text x="722" y="142" font-size="14" font-weight="700" fill="#0B7A55">file</text>
+    <text x="898" y="142" font-size="13" fill="#0B7A55" text-anchor="end">3</text>
+    <text x="722" y="162" font-size="10.5" fill="#3F6B50" font-family="system-ui, 'Noto Sans CJK SC', sans-serif">路径、上传与敏感数据</text>
+
+    <g font-size="11.5" fill="#4A4038">
+      <rect x="708" y="186" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="722" cy="198" r="4.5" fill="#B3261E"/><text x="734" y="202.5">path_traversal</text>
+      <rect x="708" y="213" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="722" cy="225" r="4.5" fill="#B3261E"/><text x="734" y="229.5">upload</text>
+      <rect x="708" y="240" width="204" height="24" rx="6" fill="#FFFFFF" stroke="#EADCCC"/><circle cx="722" cy="252" r="4.5" fill="#B3261E"/><text x="734" y="256.5">data_leak</text>
+    </g>
+  </g>
+
+  <!-- 有状态模块 -->
+  <line x1="48" y1="500" x2="912" y2="500" stroke="#EFE4D8" stroke-width="1.5"/>
+  <text x="48" y="528" font-size="14" font-weight="700" fill="#1F1B18">有状态模块</text>
+  <text x="200" y="528" font-size="11.5" fill="#7A6A5C">不实现 Detector，不在 Scanner 装配范围内 —— 输入不是单个字符串</text>
+
+  <g>
+    <rect x="48" y="544" width="272" height="100" rx="10" fill="#F5F9FA" stroke="#0E7490"/>
+    <text x="64" y="572" font-size="13" font-weight="700" fill="#0E7490" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">SessionGuard · session</text>
+    <g font-size="11" fill="#5C7276">
+      <text x="64" y="594" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="10.5">bind · verify · rotate · revoke</text>
+      <text x="64" y="614">11 种威胁 → 严重度 → Allow / Challenge / Block</text>
+      <text x="64" y="634">存储故障 ⇒ Block（fail-closed，绝不放行）</text>
+    </g>
+  </g>
+  <g>
+    <rect x="332" y="544" width="272" height="100" rx="10" fill="#FEF8F0" stroke="#B45309"/>
+    <text x="348" y="572" font-size="13" font-weight="700" fill="#B45309" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Throttle · throttle</text>
+    <g font-size="11" fill="#8A6A3A">
+      <text x="348" y="594" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">check_any · record_failure</text>
+      <text x="348" y="614">滑动窗口计数 → 阈值封禁 → 到期自动解封</text>
+      <text x="348" y="634">存储故障 ⇒ Unavailable（fail-open，交调用方）</text>
+    </g>
+  </g>
+  <g>
+    <rect x="616" y="544" width="272" height="100" rx="10" fill="#FBF7F2" stroke="#8F2A17"/>
+    <text x="632" y="572" font-size="13" font-weight="700" fill="#8F2A17" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">RiskAssessment · score</text>
+    <g font-size="11" fill="#7A6A5C">
+      <text x="632" y="594" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">assess(&amp;[DetectionResult])</text>
+      <text x="632" y="614">总分 = Σ 严重度权重，多条低危可叠加升级</text>
+      <text x="632" y="634">None / Low / Medium / High / Critical</text>
+    </g>
+  </g>
+
+  <!-- 图例 -->
+  <text x="48" y="686" font-size="12.5" fill="#7A6A5C">严重度权重</text>
+  <g font-size="12" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <circle cx="160" cy="682" r="5" fill="#B3261E"/><text x="174" y="686" fill="#4A4038">Critical 100</text>
+    <circle cx="300" cy="682" r="5" fill="#E8710A"/><text x="314" y="686" fill="#4A4038">High 40</text>
+    <circle cx="420" cy="682" r="5" fill="#F9AB00"/><text x="434" y="686" fill="#4A4038">Medium 15</text>
+    <circle cx="560" cy="682" r="5" fill="#188038"/><text x="574" y="686" fill="#4A4038">Low 5</text>
+  </g>
+  <text x="48" y="722" font-size="12" fill="#7A6A5C">任一 Critical 直接判 Critical（不靠累加）；其余按总分分档：≥40 High · ≥15 Medium · ≥1 Low · 0 None</text>
+  <text x="48" y="744" font-size="12" fill="#7A6A5C">检测器全量扫描不短路 —— 一个输入可能同时触发多种攻击，先到先报会漏报。</text>
+</svg>

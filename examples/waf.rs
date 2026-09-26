@@ -68,7 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
 
-    println!("security-rust · 端到端 WAF 链路示例");
+    println!("{}", security_rust::pet::ASCII);
+    println!("\nsecurity-rust · 端到端 WAF 链路示例");
     println!("固定时钟 T0={T0}；限流 5 次失败 / 60s 窗口 → 封禁 900s");
 
     // ── 登录：建会话 + 绑指纹 + 记登录位置 ──────────────────────────────

@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 890" width="960" height="890" role="img" aria-labelledby="lifeTitle lifeDesc" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <title id="lifeTitle">security-rust 生命周期</title>
+  <desc id="lifeDesc">三条生命周期：无状态扫描（输入 → 32 检测器 → 结果 → 评分 → 调用方处置）、会话（bind → verify → Allow/Challenge/Block → revoke）、限流（计数 → 封禁 → 到期解封）。</desc>
+
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8F7A66"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#C9B8A6"/></marker>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0E7490"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="890" fill="#FFFDFB"/>
+  <rect x="10" y="10" width="940" height="870" rx="20" fill="none" stroke="#EADCCC" stroke-width="2"/>
+
+  <text x="48" y="58" font-size="24" font-weight="700" fill="#1F1B18">security-rust · 生命周期</text>
+  <text x="48" y="84" font-size="13.5" fill="#7A6A5C">无状态扫描是纯函数（无历史）；会话与限流有状态，状态存在调用方给的 store 里</text>
+  <line x1="48" y1="102" x2="912" y2="102" stroke="#EFE4D8" stroke-width="1.5"/>
+
+  <!-- ─────────── 一、扫描生命周期 ─────────── -->
+  <rect x="48" y="120" width="864" height="180" rx="14" fill="#FDF6F3" stroke="#EADCCC"/>
+  <text x="66" y="148" font-size="13.5" font-weight="700" fill="#7A6A5C">① 扫描生命周期（无状态 · 每次调用独立）</text>
+
+  <g font-size="12.5" font-weight="700" fill="#1F1B18">
+    <rect x="64" y="170" width="152" height="76" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="78" y="196">原始输入</text>
+    <rect x="234" y="170" width="152" height="76" rx="10" fill="#FFFFFF" stroke="#B5351F" stroke-width="1.5"/>
+    <text x="248" y="196">32 个检测器</text>
+    <rect x="404" y="170" width="152" height="76" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="418" y="196">DetectionResult</text>
+    <rect x="574" y="170" width="152" height="76" rx="10" fill="#FFFFFF" stroke="#8F2A17" stroke-width="1.5"/>
+    <text x="588" y="196">score::assess</text>
+    <rect x="744" y="170" width="152" height="76" rx="10" fill="#FFFFFF" stroke="#C9B8A6" stroke-dasharray="5 4"/>
+    <text x="758" y="196">调用方处置</text>
+  </g>
+  <g font-size="10" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="78" y="216">payload: &amp;str</text>
+    <text x="78" y="232">参数 / 头 / 文件名</text>
+    <text x="248" y="216">全量扫描，不短路</text>
+    <text x="248" y="232">各自持有预编译正则</text>
+    <text x="418" y="216">×N 条命中</text>
+    <text x="418" y="232">severity · offset</text>
+    <text x="588" y="216">→ RiskAssessment</text>
+    <text x="588" y="232">level/score/results</text>
+    <text x="758" y="216">放行 / 记录 / 拒绝</text>
+    <text x="758" y="232">本库不替你决定</text>
+  </g>
+  <g stroke="#8F7A66" stroke-width="1.8" marker-end="url(#a1)">
+    <path d="M216 208 L228 208"/>
+    <path d="M386 208 L398 208"/>
+    <path d="M556 208 L568 208"/>
+    <path d="M726 208 L738 208"/>
+  </g>
+  <text x="66" y="272" font-size="11.5" fill="#7A6A5C">命中即收集该条结果；无命中返回 None ⇒ scan 得空列表 ⇒ assess 判 <tspan fill="#B5351F" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">RiskLevel::None</tspan></text>
+  <text x="66" y="292" font-size="11.5" fill="#7A6A5C">本层不阻断：DetectionResult 只是证据，拦不拦是调用方的决定</text>
+
+  <!-- ─────────── 二、会话生命周期 ─────────── -->
+  <rect x="48" y="316" width="864" height="284" rx="14" fill="#F5F9FA" stroke="#D5E3E6"/>
+  <text x="66" y="344" font-size="13.5" font-weight="700" fill="#5C7276">② 会话生命周期（SessionGuard · 有状态）</text>
+
+  <g font-size="12.5" font-weight="700" fill="#1F1B18">
+    <rect x="64" y="364" width="140" height="76" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="78" y="390">未认证</text>
+    <rect x="224" y="364" width="220" height="76" rx="10" fill="#FFFFFF" stroke="#0E7490" stroke-width="1.5"/>
+    <text x="238" y="390">bind() 建会话</text>
+    <rect x="464" y="364" width="180" height="76" rx="10" fill="#FFFFFF" stroke="#0E7490" stroke-width="1.5"/>
+    <text x="478" y="390">活跃会话</text>
+    <rect x="664" y="364" width="232" height="76" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="678" y="390">revoke / revoke_all / rotate</text>
+  </g>
+  <g font-size="10" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="78" y="410">无 token</text>
+    <text x="78" y="426">ctx.token = ""</text>
+    <text x="238" y="410">写 SessionRecord</text>
+    <text x="238" y="426">指纹 · 位置 · 签名 · 到期</text>
+    <text x="478" y="410">每请求 verify(ctx, now)</text>
+    <text x="478" y="426">命中即累积威胁</text>
+    <text x="678" y="410">吊销 ⇒ 已注销</text>
+    <text x="678" y="426">rotate ⇒ 换发新 token</text>
+  </g>
+  <g stroke="#8F7A66" stroke-width="1.8" marker-end="url(#a1)">
+    <path d="M204 402 L218 402"/>
+    <path d="M444 402 L458 402"/>
+    <path d="M644 402 L658 402"/>
+  </g>
+
+  <path d="M554 440 L554 452" stroke="#0E7490" stroke-width="1.8"/>
+  <path d="M194 452 L760 452" stroke="#0E7490" stroke-width="1.8" stroke-dasharray="5 4"/>
+  <g stroke="#0E7490" stroke-width="1.8" marker-end="url(#a3)">
+    <path d="M194 452 L194 458"/>
+    <path d="M474 452 L474 458"/>
+    <path d="M760 452 L760 458"/>
+  </g>
+
+  <g>
+    <rect x="64" y="460" width="260" height="86" rx="10" fill="#EDF7F1" stroke="#188038"/>
+    <text x="78" y="486" font-size="12.5" font-weight="700" fill="#0F6B32" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Allow</text>
+    <g font-size="10.5" fill="#3F6B50">
+      <text x="78" y="506">无威胁：allow()</text>
+      <text x="78" y="522">并 touch 刷新活跃度</text>
+      <text x="78" y="538">（被拦的请求不延长会话）</text>
+    </g>
+  </g>
+  <g>
+    <rect x="344" y="460" width="260" height="86" rx="10" fill="#FEF8F0" stroke="#E8710A"/>
+    <text x="358" y="486" font-size="12.5" font-weight="700" fill="#A85A08" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Challenge</text>
+    <g font-size="10.5" fill="#8A6A3A">
+      <text x="358" y="506">放行但要求二次验证：</text>
+      <text x="358" y="522">异地登录 · 时钟偏离</text>
+      <text x="358" y="538">签名意外（登录时没建基线）</text>
+    </g>
+  </g>
+  <g>
+    <rect x="624" y="460" width="272" height="86" rx="10" fill="#FDECEA" stroke="#B3261E"/>
+    <text x="638" y="486" font-size="12.5" font-weight="700" fill="#B3261E" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">Block</text>
+    <g font-size="10.5" fill="#8A4A44">
+      <text x="638" y="506">客户端劫持（指纹不符）· 数据篡改</text>
+      <text x="638" y="522">token 未知 / 吊销 / 过期 · 不可能旅行</text>
+      <text x="638" y="538">存储故障 ⇒ 一律 Block（fail-closed）</text>
+    </g>
+  </g>
+  <text x="66" y="572" font-size="11.5" fill="#5C7276">门槛检查（token 为空 / 未知 / 吊销 / 过期）命中即短路；进入绑定校验后逐项累积，按最严格者合并：Allow &lt; Challenge &lt; Block</text>
+  <text x="66" y="590" font-size="11.5" fill="#B3261E">fail-closed 是默认：存储后端故障 ⇒ StoreUnavailable ⇒ Block，绝不放行 —— 放行等于让攻击者诱导故障换掉一整类判定</text>
+
+  <!-- ─────────── 三、限流生命周期 ─────────── -->
+  <rect x="48" y="616" width="864" height="254" rx="14" fill="#FEF8F0" stroke="#F0DFC6"/>
+  <text x="66" y="644" font-size="13.5" font-weight="700" fill="#8A6A3A">③ 限流与封禁生命周期（Throttle · 有状态）</text>
+
+  <g font-size="12.5" font-weight="700" fill="#1F1B18">
+    <rect x="64" y="666" width="190" height="84" rx="10" fill="#FFFFFF" stroke="#188038" stroke-width="1.5"/>
+    <text x="78" y="692">正常</text>
+    <rect x="274" y="666" width="210" height="84" rx="10" fill="#FFFFFF" stroke="#B45309" stroke-width="1.5"/>
+    <text x="288" y="692">窗口内计数</text>
+    <rect x="504" y="666" width="190" height="84" rx="10" fill="#FFFFFF" stroke="#B3261E" stroke-width="1.5"/>
+    <text x="518" y="692">封禁中</text>
+    <rect x="714" y="666" width="182" height="84" rx="10" fill="#FFFFFF" stroke="#C9B8A6"/>
+    <text x="728" y="692">到期解封</text>
+  </g>
+  <g font-size="10" fill="#7A6A5C" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace">
+    <text x="78" y="712">check_any(&amp;[ip, acct])</text>
+    <text x="78" y="728">→ Allow{remaining}</text>
+    <text x="78" y="744">remaining == 0 应拒绝</text>
+    <text x="288" y="712">record_failure(key, now)</text>
+    <text x="288" y="728">window 60s 内累加</text>
+    <text x="288" y="744">record_success 清零</text>
+    <text x="518" y="712">达 threshold = 5</text>
+    <text x="518" y="728">→ Banned{until}</text>
+    <text x="518" y="744">until = now + 900s</text>
+    <text x="728" y="712">now ≥ until</text>
+    <text x="728" y="728">自动恢复，无需人工</text>
+    <text x="728" y="744">purge_expired 清理</text>
+  </g>
+  <g stroke="#8F7A66" stroke-width="1.8" marker-end="url(#a1)">
+    <path d="M254 708 L268 708"/>
+    <path d="M484 708 L498 708"/>
+    <path d="M694 708 L708 708"/>
+  </g>
+  <path d="M805 750 L805 776 L159 776 L159 754" fill="none" stroke="#188038" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#a1)"/>
+  <text x="482" y="770" font-size="11" fill="#188038" text-anchor="middle">自动解封</text>
+
+  <text x="66" y="800" font-size="11.5" fill="#8A6A3A">key 由调用方构造并规范化（如 ip:1.2.3.4 / acct:u-1），不要拿原始输入当 key；check_any 一次问完多维，按严格度合并</text>
+  <text x="66" y="822" font-size="11.5" fill="#B45309">fail-open 是唯一例外：存储故障 ⇒ ThrottleDecision::Unavailable，交调用方处置（建议放行 + 告警）</text>
+  <text x="66" y="844" font-size="11.5" fill="#7A6A5C">理由：限流是纵深防御而非主认证闸门，后端抖动时把全体用户挡在门外是自我 DoS，而主闸门 SessionGuard 仍然在拦</text>
+</svg>
