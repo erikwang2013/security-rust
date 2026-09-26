@@ -3,6 +3,10 @@ name: Auto Release
 # 推送规则：push 到 main 后，读取 Cargo.toml 最新版本，
 # 若对应 tag/release 尚不存在则增量创建（已存在则跳过）。
 # 不打包应用 —— 仅 tag + release notes。
+#
+# 创建了新 tag 时，再用同一个版本号发一次 crates.io。
+# 需要仓库 secret `CARGO_REGISTRY_TOKEN`（https://crates.io/settings/tokens）；
+# 未配置则该步骤只告警、不失败 —— 手动 `cargo publish` 仍是有效路径。
 on:
   push:
     branches: [main]
@@ -13,6 +17,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.tag.outputs.created }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,12 +31,14 @@ jobs:
         run: echo "tag=v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Create tag and release (incremental)
+        id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
             echo "Tag ${TAG} already exists — skip (incremental)"
+            echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git tag "${TAG}"
@@ -37,3 +46,32 @@ jobs:
           gh release create "${TAG}" \
             --title "${TAG}" \
             --generate-notes
+          echo "created=true" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: release
+    # 只在本次真的创建了新 tag 时发布，避免每次 push 都重试上传
+    if: needs.release.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    # cargo publish 用不上 GITHUB_TOKEN，只读即可（最小权限）
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # 用 runner 自带的 rustup 装 stable，不引入第三方 action。
+      # 本 crate 是 edition 2024（rust-version 1.87），必须确保工具链够新。
+      - name: Ensure recent stable toolchain
+        run: rustup update stable --no-self-update && rustup default stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::warning::未配置 CARGO_REGISTRY_TOKEN，跳过 crates.io 发布；可本地 cargo publish"
+            exit 0
+          fi
+          echo "发布 ${TAG} 到 crates.io"
+          cargo publish
