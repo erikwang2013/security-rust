@@ -2,9 +2,68 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](../../README.md)**
+**🌐 [中文 (原文)](../../../README.md)**
 
 Pustaka pendeteksi serangan yang ditulis dalam Rust, mencakup 4 kategori utama — serangan injeksi, serangan protokol, serangan data/serialisasi, kebocoran file/data sensitif — dengan total 32 detektor. Satu-satunya dependensi eksternal adalah `regex`, dan setiap detektor murni pemindaian string. Selain itu pustaka ini menyediakan modul stateful opsional (`session` dan `throttle`) serta modul `score` untuk penilaian risiko.
+
+Maskot proyek, **甲哨 Sentri** ([`pet.svg`](../../pet.svg)) — 32 lempeng cangkang untuk 32 detektor. Laporkan semuanya, jangan blokir apa pun.
+
+---
+
+## Maskot Proyek: 甲哨 Sentri
+
+<img src="../../pet.svg" alt="甲哨 Sentri — maskot proyek security-rust" width="340">
+
+Kepiting penjaga yang memegang kaca pembesar dan papan tanda. Karakternya bukan hiasan — ia adalah desain pustaka ini, yang digambar:
+
+| Elemen | Apa yang dipetakannya |
+|---------|---------|
+| 4 baris × 8 lempeng cangkang | 32 detektor stateless; 4 baris itu adalah injeksi / protokol / data / file |
+| Kaca pembesar di capit kiri | **Melihat** — `Detector::detect()` hanya memindai; satu temuan mengembalikan satu bukti |
+| Papan tanda di capit kanan (`已上报` — "dilaporkan") | **Melaporkan** — mengembalikan `DetectionResult`, tidak pernah melempar, tidak pernah memutus rantai pemanggilan |
+| Capit yang tidak pernah mencubit | Keputusan ada pada pemanggil; satu-satunya pengecualian adalah `SessionGuard`, yang benar-benar melakukan `Block` |
+| Monokel | Kebiasaan auditor: setiap temuan membawa `matched_pattern` dan `offset`, yang menunjuk balik ke posisi di input asli |
+| `deps: regex ×1` pada plat nama | Janji nol dependensi: `[dependencies]` selamanya hanya `regex` |
+
+Moto: **laporkan semuanya, jangan blokir apa pun.**
+
+Gambar ini dibundel ke dalam crate dengan `include_str!` (tanpa biaya runtime — tidak ditautkan jika tidak dipakai), dan versi ASCII-nya bisa langsung dicetak ke terminal atau log:
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## Struktur Proyek
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              trait Detector (satu-satunya kontrak), helper regex_detect, dokumen crate
+│   ├── scanner.rs          Scanner / ScannerBuilder: merakit seluruh 32 detektor secara bawaan
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            Penilaian risiko: jumlah berbobot + pengelompokan → RiskAssessment
+│   ├── pet.rs              Maskot proyek (NAME / TAGLINE / ASCII / SVG)
+│   ├── injection/          11 detektor injeksi
+│   ├── protocol/           11 detektor protokol
+│   ├── data/               7 detektor data
+│   ├── file/               3 detektor file
+│   ├── session/            SessionGuard + SessionStore (guard / store / geo)
+│   └── throttle/           Throttle + ThrottleStore (guard / store)
+├── tests/                  7 suite integrasi: sesi, pembatasan laju, siklus hidup, invarian, ketangguhan, end-to-end, pembatasan multi-kunci
+├── examples/
+│   ├── waf.rs              Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)
+│   └── axum_middleware.rs  Referensi integrasi middleware axum
+├── docs/
+│   ├── API.md              Referensi API lengkap
+│   ├── OWASP-COVERAGE.md   Matriks cakupan terhadap kelas serangan OWASP
+│   ├── pet.svg             Gambar maskot proyek
+│   ├── diagrams/           Diagram arsitektur / fitur / siklus hidup (SVG)
+│   ├── i18n/               README dan dokumen API dalam 12 bahasa
+│   └── ...                 Kode QR donasi, laporan tinjauan kode dan pengujian
+└── Cargo.toml              Satu-satunya dependensi runtime: regex
+```
 
 ---
 
@@ -30,41 +89,19 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | Regex vs parser | Regex | Dalam skenario deteksi, kecepatan diutamakan; regex memiliki cakupan yang lebih baik untuk pola terobfuskasi/bypass |
 | Laporkan yang pertama vs deteksi penuh | Deteksi penuh | Satu input dapat memicu beberapa jenis serangan sekaligus, sebaiknya tidak ada yang terlewat |
 | Nol dependensi vs mengimpor serde | Nol dependensi | Hanya bergantung pada `regex` — modul stateful pun menerima penyimpanan melalui trait, jadi tidak ada dependensi baru; kompilasi cepat, ukuran kecil |
+| Detektor vs modul stateful | Dipisahkan | `Detector::detect(&str)` hanya menerima satu string, sehingga tidak dapat mengungkapkan input majemuk «token + fingerprint + lokasi + waktu»; karena itu `session` / `throttle` berdiri terpisah dari `Scanner` |
+| fail-closed vs fail-open | Autentikasi fail-closed, pembatasan laju fail-open | Meloloskan keputusan sesi sama dengan dibobol, jadi harus diblokir; sedangkan memblokir semua pengguna pada pembatasan laju adalah DoS terhadap diri sendiri, dan gerbang autentikasi utama tetap menahan — keputusannya diserahkan ke pemanggil |
 
 ---
 
 ## Arsitektur Desain
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="../../diagrams/architecture.svg" alt="security-rust — arsitektur: pemanggil → lapisan deteksi → lapisan penilaian → lapisan penjaga → penyimpanan" width="900">
+
+Lima lapisan, dari atas ke bawah: **pemanggil** (WAF / gateway / audit / CLI) → **lapisan deteksi** (`Scanner` yang memegang `Vec<Box<dyn Detector>>`, 32 detektor dalam 4 kategori) → **lapisan penilaian** (`score::assess`) → **lapisan penjaga** (`SessionGuard` / `Throttle`, masing-masing terikat pada trait penyimpanan) → **abstraksi penyimpanan** (`MemoryStore` bawaan; Redis diimplementasikan oleh pemanggil).
+*(Anotasi diagram dalam bahasa Mandarin; labelnya adalah nama API.)*
+
+Trait `Detector` adalah satu-satunya kontrak lapisan deteksi: `fn detect(&self, input: &str) -> Option<DetectionResult>`. `session`, `throttle`, dan `score` tidak mengimplementasikannya — inputnya bukan satu string tunggal (token + fingerprint + lokasi + waktu), atau modul-modul ini mengonsumsi hasil pemindaian alih-alih input mentah — sehingga masing-masing menjawab sendiri, seperti didokumentasikan di bawah. Jejak balik merah di sebelah kanan menandai batas pustaka: **verdict dikembalikan ke pemanggil untuk dieksekusi**; pustaka tidak pernah menyentuh permintaan itu sendiri.
 
 ### Tanggung Jawab Modul
 
@@ -96,6 +133,11 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 ---
 
 ## Fitur yang Diimplementasikan
+
+<img src="../../diagrams/features.svg" alt="security-rust — fitur: injeksi 11, protokol 11, data 7, file 3, plus tiga modul stateful" width="900">
+
+Seluruh 32 detektor dirakit per kategori dan diaktifkan secara bawaan melalui `Scanner::default()` tanpa konfigurasi. Tabel di bawah mencantumkan cakupan masing-masing beserta tingkat severity-nya. Severity menggambarkan satu temuan; risiko agregat adalah yang dikembalikan oleh `Scanner::assess()`.
+*(Anotasi diagram dalam bahasa Mandarin; labelnya adalah nama API.)*
 
 ### Serangan Injeksi (11 detektor)
 
@@ -151,6 +193,26 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 
 ---
 
+## Siklus Hidup
+
+<img src="../../diagrams/lifecycle.svg" alt="security-rust — tiga siklus hidup: pemindaian, sesi, pembatasan laju" width="900">
+
+Tiga siklus hidup berjalan independen, dan satu-satunya titik temu adalah fungsi penanganan permintaan milik pemanggil:
+*(Anotasi diagram dalam bahasa Mandarin; labelnya adalah nama API.)*
+
+| Siklus hidup | Dimulai di | Berakhir di | Tempat state berada |
+|-----------|-----------|---------|----------------|
+| **Pemindaian** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | Tidak ada — stateless, independen per pemanggilan |
+| **Sesi** | `SessionGuard::bind()` menulis `SessionRecord` | `verify()` per permintaan → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore` (bawaan `MemoryStore`) |
+| **Pembatasan laju** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore` (bawaan `MemoryThrottleStore`) |
+
+Dua batas yang mudah keliru:
+
+- **`remaining == 0` berarti permintaan ini harus ditolak** — kuota sudah habis, bukan «masih bisa coba sekali lagi». Jangan terbalik saat menulis header `X-RateLimit-*`.
+- **Kegagalan penyimpanan ditangani ke arah yang berlawanan**: `SessionGuard` bersifat fail-closed (`StoreUnavailable` ⇒ `Block`, tidak pernah meloloskan — jika tidak, penyerang yang memicu kegagalan backend menukar seluruh kelas pemeriksaan); `Throttle` bersifat fail-open (`Unavailable` diserahkan ke pemanggil, karena memblokir semua pengguna saat backend tergelincir adalah DoS terhadap diri sendiri, dan gerbang utama `SessionGuard` tetap memblokir). Ini keputusan desain yang tertulis, bukan penanganan yang hilang.
+
+---
+
 ## Cara Penggunaan
 
 Siap pakai tanpa konfigurasi:
@@ -163,7 +225,71 @@ let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-Referensi API lengkap (instalasi, pemindaian selektif, konfigurasi kustom, tampilan severity, performa) lihat [Referensi API](./API.md).
+Penilaian risiko merangkum daftar temuan menjadi satu tingkat, agar beberapa sinyal berisiko rendah tidak diabaikan diam-diam:
+
+```rust
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+// assessment.level   >= RiskLevel::High
+// assessment.results >= 3
+// assessment.score   — poin berbobot mentah
+```
+
+Referensi API lengkap (instalasi, pemindaian selektif, konfigurasi kustom, penilaian risiko, tampilan severity, keamanan sesi, pembatasan laju dan pemblokiran, performa) lihat [Referensi API](./API.md).
+
+### Keamanan Sesi (`session`)
+
+```rust
+use security_rust::session::{Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let login = RequestContext {
+    token: "tok-abc",
+    subject: "u-1",
+    fingerprint: "ip=1.2.3.4|ua=curl",   // fingerprint klien, diikat saat login
+    location: Some("CN-BJ"),
+    coords: Some((39.9042, 116.4074)),
+    signature: None,                      // MAC ditandatangani oleh pemanggil
+    at: None,
+};
+
+// Login: buat sesi + ikat fingerprint + catat lokasi;
+// lokasi berbeda hanya memengaruhi keputusan, tidak memblokir login
+guard.bind(&login, 1_700_000_000).unwrap();
+
+// Verifikasi tiap permintaan: token sama dengan fingerprint berbeda ⇒ pembajakan klien
+let verdict = guard.verify(&RequestContext { fingerprint: "ip=5.6.7.8|ua=curl", ..login }, 1_700_000_010);
+
+match verdict.decision {
+    Decision::Allow => { /* izinkan */ }
+    Decision::Challenge => { /* izinkan tetapi minta verifikasi kedua: lokasi berbeda, jam menyimpang, signature tak terduga */ }
+    Decision::Block => { /* tolak */ }
+}
+```
+
+### Pembatasan Laju dan Pemblokiran (`throttle`)
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+let key = "acct:u-1"; // key dibuat dan dinormalkan oleh pemanggil, jangan pakai input mentah sebagai key
+let now = 1_700_000_000;
+
+// Permintaan nyata punya dua dimensi: IP dan akun. check_any menanyakan keduanya sekaligus, lalu menggabungkan yang terketat
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
+    // remaining bisa ditulis ke X-RateLimit-*; **remaining == 0 berarti permintaan ini harus ditolak**
+    ThrottleDecision::Allow { remaining } => { /* sisa kuota: remaining */ }
+    // now >= until sudah dianggap bebas blokir
+    ThrottleDecision::Banned { until } => { /* diblokir sampai until */ }
+    // kegagalan backend: modul ini tidak memutuskan untuk pemanggil (disarankan: izinkan + beri peringatan)
+    ThrottleDecision::Unavailable => { /* backend pembatasan laju tidak tersedia */ }
+}
+
+// Catat satu kegagalan autentikasi: mencapai threshold berarti diblokir. Mengembalikan ThrottleOutcome (dua keadaan),
+// sedangkan kegagalan penyimpanan menjadi Err — tidak perlu menulis kode untuk arm Unavailable yang tak pernah dieksekusi
+let _ = throttle.record_failure(key, now);
+```
 
 ---
 
@@ -173,8 +299,11 @@ Referensi API lengkap (instalasi, pemindaian selektif, konfigurasi kustom, tampi
 # Build
 cargo build --release
 
-# Tes (354 tes unit + 108 tes integrasi = 462)
+# Tes (494: 365 unit + 128 integrasi + 1 doc test)
 cargo test
+
+# Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)
+cargo run --example waf
 
 # Lint kode
 cargo clippy -- -D warnings

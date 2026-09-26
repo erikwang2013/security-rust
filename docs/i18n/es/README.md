@@ -2,9 +2,68 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](../../README.md)**
+**🌐 [中文 (原文)](../../../README.md)**
 
 Librería de detección de ataques escrita en Rust, que cubre 32 detectores en 4 grandes categorías: ataques de inyección, ataques de protocolo, ataques de datos/serialización y fuga de archivos/datos sensibles. Cero dependencias de frameworks externos: la cadena de detectores trabaja solo con cadenas y se complementa con tres módulos con estado (ver más abajo).
+
+La mascota del proyecto, **甲哨 Sentri** ([`pet.svg`](../../pet.svg)) — 32 placas de caparazón para 32 detectores. Lo reporta todo, no bloquea nada.
+
+---
+
+## Mascota del proyecto: 甲哨 Sentri
+
+<img src="../../pet.svg" alt="甲哨 Sentri — la mascota del proyecto security-rust" width="340">
+
+Un cangrejo centinela con lupa y cartel. El personaje no es decoración: es el diseño de esta librería, dibujado:
+
+| Rasgo | Correspondencia en el diseño |
+|------|---------|
+| 4 filas × 8 placas de caparazón | 32 detectores sin estado; las 4 filas = inyección / protocolo / datos / archivos |
+| Lupa en la pinza izquierda | **Ver** — `Detector::detect()` solo escanea; una coincidencia devuelve una prueba |
+| Cartel en la pinza derecha (`已上报` — «reportado») | **Reportar** — devuelve `DetectionResult`, no lanza excepciones ni interrumpe la cadena de llamadas |
+| Pinzas que nunca pellizcan | La decisión es del llamador; la única excepción es `SessionGuard`, que sí devuelve `Block` |
+| Monóculo | La enfermedad profesional del auditor: cada conclusión lleva `matched_pattern` y `offset`, hasta la posición en el texto original |
+| `deps: regex ×1` en la placa | La promesa de cero dependencias: `[dependencies]` solo contiene `regex`, siempre |
+
+Lema: **reportar todo, no bloquear nada.**
+
+La figura va integrada en la librería con `include_str!` (sin coste en tiempo de ejecución: no se enlaza si no se usa), y la versión ASCII puede escribirse directamente en una terminal o un log:
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## Estructura del proyecto
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              Trait Detector (el único contrato), auxiliar regex_detect, doc del crate
+│   ├── scanner.rs          Scanner / ScannerBuilder: ensambla por defecto los 32 detectores
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            Evaluación de riesgo: suma ponderada + tramos → RiskAssessment
+│   ├── pet.rs              La mascota del proyecto (NAME / TAGLINE / ASCII / SVG)
+│   ├── injection/          11 detectores de inyección
+│   ├── protocol/           11 detectores de protocolo
+│   ├── data/               7 detectores de datos
+│   ├── file/               3 detectores de archivos
+│   ├── session/            SessionGuard + SessionStore (guard / store / geo)
+│   └── throttle/           Throttle + ThrottleStore (guard / store)
+├── tests/                  7 suites de integración: sesión, limitación, ciclo de vida, invariantes, robustez, extremo a extremo, limitación multiclave
+├── examples/
+│   ├── waf.rs              Ejemplo de canal de extremo a extremo (escaneo → limitación → sesión → acción)
+│   └── axum_middleware.rs  Referencia de integración del middleware de axum
+├── docs/
+│   ├── API.md              Referencia completa de la API
+│   ├── OWASP-COVERAGE.md   Matriz de cobertura frente a las clases de ataque de OWASP
+│   ├── pet.svg             La mascota del proyecto
+│   ├── diagrams/           Diagramas de arquitectura / funcionalidades / ciclo de vida (SVG)
+│   ├── i18n/               READMEs y documentos de API en 12 idiomas
+│   └── ...                 Códigos QR de donación, informes de revisión y de pruebas
+└── Cargo.toml              La única dependencia en tiempo de ejecución: regex
+```
 
 ---
 
@@ -28,41 +87,19 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 | Expresiones regulares vs parser | Expresiones regulares | En escenarios de detección la velocidad es prioritaria; las expresiones regulares ofrecen mejor cobertura de patrones ofuscados/evasivos |
 | Primero que llega vs detección completa | Detección completa | Una entrada puede disparar varios tipos de ataque a la vez; no deben producirse falsos negativos |
 | Cero dependencias vs introducir serde | Cero dependencias | Solo depende de `regex`; compilación rápida, tamaño reducido |
+| Detector vs módulo con estado | Separados | `Detector::detect(&str)` solo recibe una cadena y no puede expresar la entrada compuesta «token + huella + posición + tiempo»; por eso `session` / `throttle` van junto al `Scanner`, no dentro de él |
+| fail-closed vs fail-open | Autenticación fail-closed, limitación de tasa fail-open | Una decisión de sesión que deja pasar equivale a un bypass y debe bloquear; la limitación de tasa dejaría fuera a todos los usuarios (auto-DoS), y la barrera principal de autenticación sigue bloqueando — la decisión es del llamador |
 
 ---
 
 ## Arquitectura de diseño
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="../../diagrams/architecture.svg" alt="security-rust arquitectura: llamador → capa de detección → capa de evaluación → capa de guarda → abstracción de almacenamiento" width="900">
+
+Cinco capas, de arriba abajo: **llamador** (WAF / puerta de enlace / auditoría / CLI) → **capa de detección** (`Scanner` con `Vec<Box<dyn Detector>>`, 32 detectores en 4 categorías) → **capa de evaluación** (`score::assess`) → **capa de guarda** (`SessionGuard` / `Throttle`, cada uno ligado a un trait de almacenamiento) → **abstracción de almacenamiento** (`MemoryStore` integrado, Redis implementado por el llamador).
+*(Las anotaciones del diagrama están en chino; las etiquetas son nombres de API.)*
+
+El trait `Detector` es el único contrato de la capa de detección: `fn detect(&self, input: &str) -> Option<DetectionResult>`. `session`, `throttle` y `score` no lo implementan — su entrada no es una sola cadena (token + huella + posición y tiempo), o bien consumen los resultados del escaneo en lugar de la entrada bruta — así que responden por su cuenta (ver más abajo). El camino de retorno rojo, a la derecha, marca el límite de esta librería: **el veredicto vuelve al llamador para que lo ejecute**; la librería nunca toca la petición.
 
 ### Responsabilidades de los módulos
 
@@ -81,6 +118,11 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 ---
 
 ## Funcionalidades implementadas
+
+<img src="../../diagrams/features.svg" alt="security-rust funcionalidades: inyección 11, protocolo 11, datos 7, archivos 3, más tres módulos con estado" width="900">
+
+Los 32 detectores se ensamblan por categoría y se activan todos sin configuración mediante `Scanner::default()`. Las tablas siguientes detallan lo que cubre cada uno y su severidad. La severidad describe una sola coincidencia; el riesgo global agregado es el que devuelve `Scanner::assess()`.
+*(Las anotaciones del diagrama están en chino; las etiquetas son nombres de API.)*
 
 ### Ataques de inyección (11 detectores)
 
@@ -152,6 +194,26 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 
 ---
 
+## Ciclo de vida
+
+<img src="../../diagrams/lifecycle.svg" alt="security-rust tres ciclos de vida: escaneo, sesión, limitación de tasa" width="900">
+
+Tres ciclos de vida independientes entre sí, que solo confluyen en el manejador de peticiones del llamador:
+*(Las anotaciones del diagrama están en chino; las etiquetas son nombres de API.)*
+
+| Ciclo de vida | Inicio | Fin | Dónde vive el estado |
+|---------|------|------|---------|
+| **Escaneo** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | Ninguno: sin estado, cada llamada es independiente |
+| **Sesión** | `SessionGuard::bind()` escribe un `SessionRecord` | `verify()` en cada petición → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore` (`MemoryStore` integrado) |
+| **Limitación de tasa** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore` (`MemoryThrottleStore` integrado) |
+
+Dos bordes fáciles de equivocar:
+
+- **`remaining == 0` significa que esta petición debe rechazarse** — la cuota está agotada, no es «un intento más». No lo inviertas al escribir las cabeceras `X-RateLimit-*`.
+- **Los fallos de almacenamiento se tratan en direcciones opuestas**: `SessionGuard` es fail-closed (`StoreUnavailable` ⇒ `Block`, nunca deja pasar; si no, un atacante que provoca un fallo del backend neutraliza toda una clase de comprobaciones); `Throttle` es fail-open (`Unavailable` se entrega al llamador, porque dejar fuera a todos los usuarios ante un hipo del backend sería un auto-DoS, y la barrera principal `SessionGuard` sigue bloqueando). Es una decisión de diseño escrita, no un fallback olvidado.
+
+---
+
 ## Guía de uso
 
 Utilizable con cero configuración:
@@ -164,7 +226,73 @@ let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-La referencia completa de la API (instalación, escaneo selectivo, configuración personalizada, visualización de severidad, rendimiento) está en la [referencia de la API](./API.md).
+La evaluación de riesgo convierte la lista de coincidencias en un único nivel, para que las señales de baja gravedad acumuladas no pasen inadvertidas:
+
+```rust
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+// assessment.level   >= RiskLevel::High
+// assessment.results >= 3
+// assessment.score   — puntos brutos ponderados
+```
+
+La referencia completa de la API (instalación, escaneo selectivo, configuración personalizada, evaluación de riesgo, visualización de severidad, seguridad de sesión, limitación de tasa y bloqueo, rendimiento) está en la [referencia de la API](./API.md).
+
+### Seguridad de sesión (`session`)
+
+```rust
+use security_rust::session::{Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let login = RequestContext {
+    token: "tok-abc",
+    subject: "u-1",
+    fingerprint: "ip=1.2.3.4|ua=curl",   // huella del cliente, se liga al iniciar sesión
+    location: Some("CN-BJ"),
+    coords: Some((39.9042, 116.4074)),
+    signature: None,                      // el MAC lo firma el llamador
+    at: None,
+};
+
+// Inicio de sesión: crear la sesión + ligar la huella + registrar la ubicación; una ubicación
+// inusual solo afecta al veredicto, no bloquea el inicio de sesión
+guard.bind(&login, 1_700_000_000).unwrap();
+
+// Verificación en cada petición: el mismo token con otra huella ⇒ secuestro de cliente
+let verdict = guard.verify(&RequestContext { fingerprint: "ip=5.6.7.8|ua=curl", ..login }, 1_700_000_010);
+
+match verdict.decision {
+    Decision::Allow => { /* dejar pasar */ }
+    Decision::Challenge => { /* dejar pasar pero exigir una segunda verificación: ubicación inusual, desviación de reloj, firma inesperada */ }
+    Decision::Block => { /* rechazar */ }
+}
+```
+
+### Limitación de tasa y bloqueo (`throttle`)
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+let key = "acct:u-1"; // la clave la construye y normaliza el llamador; no pases la entrada bruta como clave
+let now = 1_700_000_000;
+
+// Una petición real tiene dos dimensiones: IP y cuenta. check_any las consulta en una sola llamada
+// y las fusiona por estrictez
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
+    // remaining puede escribirse en X-RateLimit-*; **remaining == 0 significa que esta petición debe rechazarse**
+    ThrottleDecision::Allow { remaining } => { /* cupo restante remaining */ }
+    // desde now >= until el bloqueo se considera levantado
+    ThrottleDecision::Banned { until } => { /* bloqueado, se levanta en until */ }
+    // fallo del backend: este módulo no decide por el llamador (recomendado: dejar pasar + alertar)
+    ThrottleDecision::Unavailable => { /* backend de limitación no disponible */ }
+}
+
+// Registrar un fallo de autenticación: al llegar a threshold se bloquea. Devuelve ThrottleOutcome
+// (dos estados); un fallo del almacén va como Err — no hace falta código muerto para una
+// rama Unavailable que nunca se ejecuta
+let _ = throttle.record_failure(key, now);
+```
 
 ---
 
@@ -174,8 +302,11 @@ La referencia completa de la API (instalación, escaneo selectivo, configuració
 # Compilar
 cargo build --release
 
-# Pruebas (462 pruebas: 354 unitarias, 46 de integración, 62 de módulo)
+# Pruebas (494: 365 unitarias, 128 de integración, 1 de documentación)
 cargo test
+
+# Ejemplo de canal de extremo a extremo (escaneo → limitación → sesión → acción)
+cargo run --example waf
 
 # Revisión de código
 cargo clippy -- -D warnings

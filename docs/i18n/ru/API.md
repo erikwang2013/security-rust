@@ -2,7 +2,7 @@
 
 # Справочник API security-rust
 
-[中文](../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [Русский (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [Русский (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 Единственный контракт для всех детекторов:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -41,7 +41,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### Быстрый старт
@@ -124,19 +124,18 @@ if verdict.decision == Decision::Block {
 
 // Ограничение частоты — эшелонированная защита: при сбое Unavailable, а не Banned
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
-match throttle.check("user:42", now) {
+match throttle.check("acct:user-42", now) {
     ThrottleDecision::Allow { remaining: 0 } => { /* отклонить: лимит исчерпан */ }
     ThrottleDecision::Allow { .. } => { /* пропустить */ }
     ThrottleDecision::Banned { until } => { /* бан до `until` */ }
     ThrottleDecision::Unavailable => { /* решать самостоятельно */ }
-
+}
 
 // Объединить несколько измерений (например, IP + аккаунт): побеждает самый строгий результат
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);
-match throttle.record_failure("user:42", now) {
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);
+match throttle.record_failure("acct:user-42", now) {
     Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
     Err(_) => { /* сбой хранилища */ }
-}
 }
 
 // Оценка риска: агрегировать отдельные сигналы в измеримую величину
@@ -181,6 +180,7 @@ let risk = Scanner::default().assess(input);
 | Протокол | `src/protocol/` | 11 |
 | Данные | `src/data/` | 7 |
 | Файлы | `src/file/` | 3 |
+| Питомец | `src/pet.rs` | — |
 
 ## Производительность
 

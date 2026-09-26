@@ -2,7 +2,7 @@
 
 # security-rust API संदर्भ
 
-[中文](../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [हिन्दी (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [हिन्दी (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 सभी डिटेक्टरों का एकमात्र अनुबंध:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### त्वरित शुरुआत
@@ -145,7 +145,7 @@ match throttle.check(key, now) {
     ThrottleDecision::Unavailable => { /* स्टोर उपलब्ध नहीं */ }
 }
 // एक साथ कई आयाम जाँचें (जैसे IP + खाता): सबसे सख़्त नतीजा मान्य होता है
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);  // ThrottleDecision
 let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
@@ -186,6 +186,7 @@ let a = Scanner::default().assess(input);  // सीधे RiskAssessment
 | सत्र | `src/session/` | — |
 | दर सीमा | `src/throttle/` | — |
 | जोखिम स्कोरिंग | `src/score.rs` | — |
+| मास्कॉट | `src/pet.rs` | — |
 
 ## प्रदर्शन
 

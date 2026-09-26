@@ -2,7 +2,7 @@
 
 # security-rust API 참조
 
-[中文](../../README.md) | [English](../en/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [한국어 (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [한국어 (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 모든 탐지기의 유일한 계약:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### 빠른 시작
@@ -158,7 +158,7 @@ use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, Thr
 let now = 1_700_000_000u64;
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
-match throttle.check("user:42", now) {
+match throttle.check("acct:user-42", now) {
     ThrottleDecision::Allow { remaining } => {
         // X-RateLimit-*에 실어 보낸다. remaining == 0이면 이 요청은 거부해야 한다
     }
@@ -167,14 +167,14 @@ match throttle.check("user:42", now) {
 }
 
 // 여러 차원을 하나로 합친다(예: IP + 계정). 가장 엄격한 결과가 채택된다
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);  // ThrottleDecision
 
 // 인증 실패·성공을 기록해 윈도를 진행시킨다
-match throttle.record_failure("user:42", now) {
+match throttle.record_failure("acct:user-42", now) {
     Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
     Err(_) => { /* 저장소 장애 */ }
 }
-throttle.record_success("user:42")?;
+throttle.record_success("acct:user-42")?;
 ```
 
 - `Throttle<S: ThrottleStore>` — `check` / `check_any` / `record_failure` / `record_success` / `reset` / `purge_expired`
@@ -219,6 +219,7 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 | 세션 | `src/session/` | — |
 | 속도 제한 | `src/throttle/` | — |
 | 스코어링 | `src/score.rs` | — |
+| 펫 | `src/pet.rs` | — |
 
 ## 성능
 

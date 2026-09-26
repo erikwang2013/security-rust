@@ -2,7 +2,7 @@
 
 # Referensi API security-rust
 
-[中文](../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [日本語](../ja/API.md) | [Bahasa Indonesia (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [日本語](../ja/API.md) | [Bahasa Indonesia (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 Satu-satunya kontrak untuk semua detektor:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### Mulai Cepat
@@ -145,7 +145,7 @@ match throttle.check(key, now) {
     ThrottleDecision::Unavailable => { /* penyimpanan tidak tersedia */ }
 }
 // Periksa beberapa dimensi sekaligus (mis. IP + akun): hasil terketat yang dipakai
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);  // ThrottleDecision
 let outcome = throttle.record_failure(key, now)?;  // Result<ThrottleOutcome, StoreError>
 throttle.record_success(key)?;       // Result<(), StoreError>
 throttle.reset(key)?;                // Result<(), StoreError>
@@ -186,6 +186,7 @@ let a = Scanner::default().assess(input);  // langsung RiskAssessment
 | Sesi | `src/session/` | — |
 | Pembatasan laju | `src/throttle/` | — |
 | Penilaian risiko | `src/score.rs` | — |
+| Maskot | `src/pet.rs` | — |
 
 ## Performa
 

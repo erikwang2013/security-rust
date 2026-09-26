@@ -2,7 +2,7 @@
 
 # security-rust API リファレンス
 
-[中文](../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語 (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語 (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 全検出器の唯一の契約:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### クイックスタート
@@ -158,7 +158,7 @@ use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, Thr
 let now = 1_700_000_000u64;
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
 
-match throttle.check("user:42", now) {
+match throttle.check("acct:user-42", now) {
     ThrottleDecision::Allow { remaining } => {
         // X-RateLimit-* に載せる。remaining == 0 なら本リクエストは拒否する
     }
@@ -167,14 +167,14 @@ match throttle.check("user:42", now) {
 }
 
 // 複数のディメンションを併合する（例: IP + アカウント）。最も厳しい結果が採用される
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);  // ThrottleDecision
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);  // ThrottleDecision
 
 // 認証の失敗・成功を記録してウィンドウを進める
-match throttle.record_failure("user:42", now) {
+match throttle.record_failure("acct:user-42", now) {
     Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
     Err(_) => { /* ストレージ障害 */ }
 }
-throttle.record_success("user:42")?;
+throttle.record_success("acct:user-42")?;
 ```
 
 - `Throttle<S: ThrottleStore>` — `check` / `check_any` / `record_failure` / `record_success` / `reset` / `purge_expired`
@@ -219,6 +219,7 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 | セッション | `src/session/` | — |
 | レート制限 | `src/throttle/` | — |
 | スコアリング | `src/score.rs` | — |
+| ペット | `src/pet.rs` | — |
 
 ## 性能
 

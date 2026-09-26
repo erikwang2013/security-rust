@@ -2,9 +2,68 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](../../README.md)**
+**🌐 [中文 (原文)](../../../README.md)**
 
 An attack detection library written in Rust, covering 4 major categories — injection attacks, protocol attacks, data/serialization attacks, and file/sensitive-data leaks — with 32 detectors in total. Alongside them, three stateful guards cover the parts a string scanner cannot reach on its own: session security, rate limiting, and risk scoring. Zero external framework dependencies — the only crate is `regex`.
+
+The project pet, **Sentri** ([`pet.svg`](../../pet.svg)) — 32 shell plates for 32 detectors. Reports everything, blocks nothing.
+
+---
+
+## Project Pet: Sentri
+
+<img src="../../pet.svg" alt="Sentri — the security-rust project pet" width="340">
+
+A sentry crab holding a magnifying glass and a sign. The character is not decoration — it is this library's design, drawn:
+
+| Feature | What it maps to |
+|---------|-----------------|
+| 4 rows × 8 shell plates | 32 stateless detectors; the 4 rows are injection / protocol / data / file |
+| Magnifying glass in the left claw | **Looking** — `Detector::detect()` only scans; a hit returns one piece of evidence |
+| Sign in the right claw (`已上报` — "reported") | **Reporting** — returns `DetectionResult`, never throws, never breaks the call chain |
+| Claws that never pinch | The decision belongs to the caller; the one exception is `SessionGuard`, which really does `Block` |
+| Monocle | An auditor's habit: every hit carries `matched_pattern` and `offset`, pointing back into the original input |
+| `deps: regex ×1` on the nameplate | The zero-dependency promise: `[dependencies]` is only ever `regex` |
+
+Motto: **report everything, block nothing.**
+
+The artwork is bundled into the crate with `include_str!` (no runtime cost — not linked unless used), and the ASCII version goes straight to a terminal or a log:
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## Project Layout
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              Detector trait (the only contract), regex_detect helper, crate docs
+│   ├── scanner.rs          Scanner / ScannerBuilder: assembles all 32 detectors by default
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            Risk scoring: weighted sum + banding → RiskAssessment
+│   ├── pet.rs              The project pet (NAME / TAGLINE / ASCII / SVG)
+│   ├── injection/          11 injection detectors
+│   ├── protocol/           11 protocol detectors
+│   ├── data/               7 data detectors
+│   ├── file/               3 file detectors
+│   ├── session/            SessionGuard + SessionStore (guard / store / geo)
+│   └── throttle/           Throttle + ThrottleStore (guard / store)
+├── tests/                  7 integration suites: session, throttle, lifecycle, invariants, robustness, end-to-end, multi-key throttle
+├── examples/
+│   ├── waf.rs              End-to-end pipeline (scan → throttle → session → action)
+│   └── axum_middleware.rs  axum middleware integration reference
+├── docs/
+│   ├── API.md              Full API reference
+│   ├── OWASP-COVERAGE.md   Coverage matrix against OWASP attack classes
+│   ├── pet.svg             The project pet artwork
+│   ├── diagrams/           Architecture / features / lifecycle diagrams (SVG)
+│   ├── i18n/               12-language READMEs and API docs
+│   └── ...                 Donation QR codes, code-review and test reports
+└── Cargo.toml              The single runtime dependency: regex
+```
 
 ---
 
@@ -32,6 +91,7 @@ The `session`, `throttle`, and `score` modules sit beside the scanner rather tha
 | First-hit reporting vs. full detection | Full detection | One input can trigger multiple attack types at once; nothing should be missed |
 | Zero dependency vs. adding serde | Zero dependency | Depends only on `regex` — fast compilation, small footprint |
 | Regex-only scanning vs. stateful reasoning | Both, side by side | String scanning cannot express "same user, different country, 5 minutes later"; `session`/`throttle` add that without pulling the scanner off its contract |
+| fail-closed vs. fail-open | Authentication fail-closed, throttling fail-open | Letting a session verdict through is a bypass and must be blocked; locking every user out when the throttling backend blips is self-DoS, and the primary gate is still blocking — the disposition belongs to the caller |
 
 The zero-dependency constraint shapes the stateful modules too: tokens, signatures, and geo coordinates are all **supplied by the caller**, since parsing a JWT or resolving an IP would mean a new dependency. Both take a store trait (`SessionStore` / `ThrottleStore`), so a multi-instance deployment can back them with Redis without touching this crate.
 
@@ -39,38 +99,12 @@ The zero-dependency constraint shapes the stateful modules too: tokens, signatur
 
 ## Architecture
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │  11 个      │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="../../diagrams/architecture.svg" alt="security-rust architecture: caller → detection layer → scoring layer → guard layer → storage" width="900">
 
-The `session`, `throttle`, and `score` modules hold state and are not part of this pipeline — they are documented separately under [Implemented Features](#implemented-features).
+Five layers, top to bottom: **caller** (WAF / gateway / audit / CLI) → **detection layer** (`Scanner` holding `Vec<Box<dyn Detector>>`, 32 detectors in 4 categories) → **scoring layer** (`score::assess`) → **guard layer** (`SessionGuard` / `Throttle`, each bound to a store trait) → **storage abstraction** (built-in `MemoryStore`, Redis implemented by the caller).
+*(Diagram annotations are in Chinese; the labels are API names.)*
+
+The `Detector` trait is the detection layer's only contract: `fn detect(&self, input: &str) -> Option<DetectionResult>`. `session`, `throttle`, and `score` do not implement it — their input is not a single string (token + fingerprint + location + time), or they consume scan results instead of raw input — so they answer on their own, as documented below. The red return path on the right marks the library's boundary: **the verdict goes back to the caller to execute**; the library never touches the request itself.
 
 ### Module Responsibilities
 
@@ -92,6 +126,11 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 ---
 
 ## Implemented Features
+
+<img src="../../diagrams/features.svg" alt="security-rust features: injection 11, protocol 11, data 7, file 3, plus three stateful modules" width="900">
+
+All 32 detectors are assembled by category and enabled by default through `Scanner::default()` with zero configuration. The tables below list what each one covers and its severity. Severity describes a single hit; the aggregated risk is what `Scanner::assess()` returns.
+*(Diagram annotations are in Chinese; the labels are API names.)*
 
 ### Injection Attacks (11 Detectors)
 
@@ -144,6 +183,26 @@ The `session`, `throttle`, and `score` modules hold state and are not part of th
 | **path_traversal** | Directory traversal via `../`/`..\\`, URL-encoded bypass `%2e%2e`, protocol wrappers `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, null-byte truncation `%00` | Critical |
 | **upload** | PHP tags `<?php`/`<?=`, ASP tags `<%@`/`<%=`, backdoor patterns `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobals `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, encoding bypass via `base64_decode()` | Critical |
 | **data_leak** | 16-digit credit card PANs (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM private key headers `-----BEGIN`, OpenAI/LLM API Keys `sk-...`, database connection strings `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, JWT tokens | Critical |
+
+---
+
+## Lifecycle
+
+<img src="../../diagrams/lifecycle.svg" alt="security-rust lifecycles: scan, session, throttling" width="900">
+
+Three lifecycles run independently, meeting only in the caller's request handler:
+*(Diagram annotations are in Chinese; the labels are API names.)*
+
+| Lifecycle | Starts at | Ends at | State lives in |
+|-----------|-----------|---------|----------------|
+| **Scan** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | Nothing — stateless, independent per call |
+| **Session** | `SessionGuard::bind()` writes a `SessionRecord` | `verify()` per request → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore` (built-in `MemoryStore`) |
+| **Throttling** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore` (built-in `MemoryThrottleStore`) |
+
+Two edges that are easy to get wrong:
+
+- **`remaining == 0` means this request should be rejected** — the quota is exhausted, not "one more try left". Don't invert it when writing `X-RateLimit-*` headers.
+- **Store failures are handled in opposite directions**: `SessionGuard` is fail-closed (`StoreUnavailable` ⇒ `Block`, never allow — otherwise an attacker who induces a backend failure swaps out a whole class of checks); `Throttle` is fail-open (`Unavailable` is handed to the caller, because locking every user out on a backend blip is self-DoS, and the primary gate `SessionGuard` is still blocking). This is a written design decision, not a missing fallback.
 
 ---
 
@@ -234,20 +293,23 @@ assert_eq!(
 
 Keys are caller-constructed (`format!("ip:{ip}")`, `format!("acct:{user}")`) and must be normalized and non-empty: handing raw request values straight to `check` lets an attacker split into unlimited buckets by varying the value, and an empty key puts every failed request in one bucket.
 
-See the [API Reference](./API.md) for the complete API documentation (installation, selective scanning, custom configuration, severity display, store traits, performance).
+See the [API Reference](./API.md) for the complete API documentation (installation, selective scanning, custom configuration, risk scoring, severity display, session security, throttling, performance).
 
 ---
 
 ## Development
 
 ```bash
-# 构建
+# Build
 cargo build --release
 
-# 测试（462 个测试：354 单元 + 46 集成 + 62 会话/限流）
+# Tests (494: 365 unit + 128 integration + 1 doc test)
 cargo test
 
-# 代码检查
+# End-to-end pipeline example (scan → throttle → session → action)
+cargo run --example waf
+
+# Lints
 cargo clippy -- -D warnings
 ```
 

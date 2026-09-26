@@ -2,9 +2,68 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](../../README.md)**
+**🌐 [中文 (原文)](../../../README.md)**
 
 In Rust geschriebene Angriffserkennungsbibliothek, die 32 Detektoren in vier Kategorien abdeckt: Injection-Angriffe, Protokollangriffe, Daten-/Serialisierungsangriffe sowie Datei-/Datenlecks. Keine externen Framework-Abhängigkeiten: Die Detektor-Kette arbeitet rein auf Strings, ergänzt um drei zustandsbehaftete Module (siehe unten).
+
+Das Projekt-Haustier **甲哨 Sentri** ([`pet.svg`](../../pet.svg)) — 32 Panzerplatten für 32 Detektoren. Meldet alles, blockiert nichts.
+
+---
+
+## Projekt-Haustier: 甲哨 Sentri
+
+<img src="../../pet.svg" alt="甲哨 Sentri — das Projekt-Haustier von security-rust" width="340">
+
+Eine Wächterkrabbe mit Lupe und Schild. Die Figur ist keine Dekoration — sie ist das Design dieser Bibliothek, gezeichnet:
+
+| Figur | Entsprechung im Design |
+|------|---------|
+| 4 Reihen × 8 Panzerplatten | 32 zustandslose Detektoren; die 4 Reihen = Injection / Protokoll / Daten / Datei |
+| Lupe in der linken Schere | **Sehen** — `Detector::detect()` scannt nur; ein Treffer liefert genau einen Beleg |
+| Schild in der rechten Schere (`已上报` — „gemeldet") | **Melden** — liefert `DetectionResult`, wirft keine Ausnahme, unterbricht keine Aufrufkette |
+| Scheren, die nie zwicken | Die Entscheidung liegt beim Aufrufer; die einzige Ausnahme ist `SessionGuard`, der wirklich `Block` liefert |
+| Monokel | Die Berufskrankheit des Auditors: jeder Befund trägt `matched_pattern` und `offset` und zeigt auf die Stelle im Original |
+| `deps: regex ×1` auf dem Typenschild | Das Null-Abhängigkeits-Versprechen: `[dependencies]` enthält immer nur `regex` |
+
+Leitspruch: **alles melden, nichts blockieren.**
+
+Die Figur ist per `include_str!` in die Bibliothek eingebunden (keine Laufzeitkosten — ohne Nutzung wird sie nicht gelinkt); die ASCII-Version lässt sich direkt in ein Terminal oder Log schreiben:
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## Projektstruktur
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              Detector-Trait (der einzige Vertrag), regex_detect-Helfer, Crate-Doku
+│   ├── scanner.rs          Scanner / ScannerBuilder: montiert standardmäßig alle 32 Detektoren
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            Risikobewertung: Gewichtssumme + Stufen → RiskAssessment
+│   ├── pet.rs              Die Figur des Projekt-Haustiers (NAME / TAGLINE / ASCII / SVG)
+│   ├── injection/          11 Injection-Detektoren
+│   ├── protocol/           11 Protokoll-Detektoren
+│   ├── data/               7 Daten-Detektoren
+│   ├── file/               3 Datei-Detektoren
+│   ├── session/            SessionGuard + SessionStore (guard / store / geo)
+│   └── throttle/           Throttle + ThrottleStore (guard / store)
+├── tests/                  7 Integrationstests: Sitzung, Throttle, Lebenszyklus, Invarianten, Robustheit, End-to-End, Multi-Key-Throttle
+├── examples/
+│   ├── waf.rs              End-to-End-Pipeline (Scannen → Throttle → Sitzung → Maßnahme)
+│   └── axum_middleware.rs  Referenz zur Einbindung der axum-Middleware
+├── docs/
+│   ├── API.md              Vollständige API-Referenz
+│   ├── OWASP-COVERAGE.md   Abdeckungsmatrix gegen OWASP-Angriffsklassen
+│   ├── pet.svg             Die Figur des Projekt-Haustiers
+│   ├── diagrams/           Architektur-/Funktions-/Lebenszyklus-Diagramme (SVG)
+│   ├── i18n/               READMEs und API-Dokumente in 12 Sprachen
+│   └── ...                 Spenden-QR-Codes, Code-Review- und Testberichte
+└── Cargo.toml              Die einzige Laufzeitabhängigkeit: regex
+```
 
 ---
 
@@ -28,41 +87,19 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 | Regex vs. Parser | Regex | Geschwindigkeit hat im Erkennungsszenario Vorrang; Regex deckt verzerrte/Bypass-Muster besser ab |
 | Ersttreffer vs. vollständige Erkennung | Vollständige Erkennung | Eine Eingabe kann mehrere Angriffsarten gleichzeitig auslösen; nichts darf übersehen werden |
 | Null-Abhängigkeiten vs. Einführung von serde | Null-Abhängigkeiten | Nur `regex`; schnelle Kompilierung, kleine Größe |
+| Detektor vs. zustandsbehaftetes Modul | Getrennt | `Detector::detect(&str)` bekommt nur einen String und kann die zusammengesetzte Eingabe „Token + Fingerabdruck + Position + Zeit" nicht ausdrücken; `session` / `throttle` stehen deshalb neben dem `Scanner` |
+| fail-closed vs. fail-open | Authentifizierung fail-closed, Ratenbegrenzung fail-open | Eine Sitzungsentscheidung, die durchlässt, ist gleichbedeutend mit einer Umgehung und muss blockieren; die Ratenbegrenzung würde sonst alle Nutzer aussperren (Selbst-DoS), und das primäre Authentifizierungs-Gate blockiert weiterhin — die Entscheidung liegt beim Aufrufer |
 
 ---
 
 ## Architektur
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="../../diagrams/architecture.svg" alt="security-rust Architektur: Aufrufer → Erkennungsschicht → Bewertungsschicht → Wächter-Schicht → Speicherabstraktion" width="900">
+
+Fünf Schichten von oben nach unten: **Aufrufer** (WAF / Gateway / Audit / CLI) → **Erkennungsschicht** (`Scanner` mit `Vec<Box<dyn Detector>>`, 32 Detektoren in vier Kategorien) → **Bewertungsschicht** (`score::assess`) → **Wächter-Schicht** (`SessionGuard` / `Throttle`, jeweils an ein Store-Trait gebunden) → **Speicherabstraktion** (eingebautes `MemoryStore`, Redis vom Aufrufer implementiert).
+*(Die Beschriftungen im Diagramm sind auf Chinesisch; die Bezeichner sind API-Namen.)*
+
+Das `Detector`-Trait ist der einzige Vertrag der Erkennungsschicht: `fn detect(&self, input: &str) -> Option<DetectionResult>`. `session`, `throttle` und `score` implementieren es nicht — ihre Eingabe ist kein einzelner String (Token + Fingerabdruck + Position + Zeit), oder sie konsumieren Scan-Ergebnisse statt der Roh-Eingabe — und antworten deshalb eigenständig (siehe unten). Der rote Rückweg rechts markiert die Grenze dieser Bibliothek: **das Urteil geht zur Ausführung zurück an den Aufrufer**; die Bibliothek selbst berührt die Anfrage nicht.
 
 ### Zuständigkeiten der Module
 
@@ -81,6 +118,11 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 ---
 
 ## Implementierte Funktionen
+
+<img src="../../diagrams/features.svg" alt="security-rust Funktionsübersicht: Injection 11, Protokoll 11, Daten 7, Datei 3, dazu drei zustandsbehaftete Module" width="900">
+
+Alle 32 Detektoren werden nach Kategorie montiert und sind über `Scanner::default()` ohne Konfiguration vollständig aktiv. Die folgenden Tabellen listen auf, was jeder einzelne abdeckt, samt Schweregrad. Der Schweregrad beschreibt einen einzelnen Treffer; das aggregierte Gesamtrisiko liefert `Scanner::assess()`.
+*(Die Beschriftungen im Diagramm sind auf Chinesisch; die Bezeichner sind API-Namen.)*
 
 ### Injection-Angriffe (11 Detektoren)
 
@@ -152,6 +194,26 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 
 ---
 
+## Lebenszyklus
+
+<img src="../../diagrams/lifecycle.svg" alt="security-rust drei Lebenszyklen: Scan, Sitzung, Throttle" width="900">
+
+Drei Lebenszyklen laufen unabhängig voneinander; sie treffen sich nur im Request-Handler des Aufrufers:
+*(Die Beschriftungen im Diagramm sind auf Chinesisch; die Bezeichner sind API-Namen.)*
+
+| Lebenszyklus | Beginn | Ende | Zustandsablage |
+|---------|------|------|---------|
+| **Scan** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | Zustandslos, jeder Aufruf ist eigenständig |
+| **Sitzung** | `SessionGuard::bind()` schreibt einen `SessionRecord` | pro Request `verify()` → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore` (eingebaut: `MemoryStore`) |
+| **Throttle** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore` (eingebaut: `MemoryThrottleStore`) |
+
+Zwei Grenzfälle, die leicht danebengehen:
+
+- **`remaining == 0` heißt: diese Anfrage muss abgelehnt werden** — das Kontingent ist aufgebraucht, nicht „noch ein Versuch". Beim Schreiben von `X-RateLimit-*` nicht verdrehen.
+- **Speicherfehler werden gegenläufig behandelt**: `SessionGuard` ist fail-closed (`StoreUnavailable` ⇒ `Block`, es wird nie durchgelassen — sonst tauscht ein Angreifer, der einen Backend-Ausfall provoziert, eine ganze Klasse von Prüfungen aus); `Throttle` ist fail-open (`Unavailable` geht an den Aufrufer, denn alle Nutzer bei einem Backend-Aussetzer auszusperren wäre ein Selbst-DoS, und das Hauptgate `SessionGuard` blockiert weiterhin). Das ist eine bewusst festgeschriebene Entscheidung, kein fehlender Fallback.
+
+---
+
 ## Verwendung
 
 Sofort einsatzbereit ohne Konfiguration:
@@ -164,7 +226,73 @@ let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-Die vollständige API-Referenz (Installation, selektive Scans, benutzerdefinierte Konfiguration, Schweregrad-Anzeige, Leistung) findest du in der [API-Referenz](./API.md).
+Die Risikobewertung fasst die Trefferliste zu einer einzigen Stufe zusammen, damit gestapelte Signale niedriger Schwere nicht stillschweigend untergehen:
+
+```rust
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+// assessment.level   >= RiskLevel::High
+// assessment.results >= 3
+// assessment.score   — gewichtete Rohpunkte
+```
+
+Die vollständige API-Referenz (Installation, selektive Scans, benutzerdefinierte Konfiguration, Risikobewertung, Schweregrad-Anzeige, Sitzungssicherheit, Ratenbegrenzung und Sperre, Leistung) findest du in der [API-Referenz](./API.md).
+
+### Sitzungssicherheit (`session`)
+
+```rust
+use security_rust::session::{Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let login = RequestContext {
+    token: "tok-abc",
+    subject: "u-1",
+    fingerprint: "ip=1.2.3.4|ua=curl",   // Client-Fingerabdruck, beim Login gebunden
+    location: Some("CN-BJ"),
+    coords: Some((39.9042, 116.4074)),
+    signature: None,                      // MAC wird vom Aufrufer signiert
+    at: None,
+};
+
+// Login: Sitzung anlegen + Fingerabdruck binden + Position erfassen; ein fremder Ort
+// beeinflusst nur das Verdict, er blockiert den Login nicht
+guard.bind(&login, 1_700_000_000).unwrap();
+
+// Prüfung pro Request: derselbe Token, ein anderer Fingerabdruck ⇒ Client-Hijacking
+let verdict = guard.verify(&RequestContext { fingerprint: "ip=5.6.7.8|ua=curl", ..login }, 1_700_000_010);
+
+match verdict.decision {
+    Decision::Allow => { /* durchlassen */ }
+    Decision::Challenge => { /* durchlassen, aber zweite Prüfung verlangen: fremder Ort, Zeitabweichung, unerwartete Signatur */ }
+    Decision::Block => { /* ablehnen */ }
+}
+```
+
+### Ratenbegrenzung und Sperre (`throttle`)
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+let key = "acct:u-1"; // den key konstruiert und normalisiert der Aufrufer — nie Roh-Eingaben als key verwenden
+let now = 1_700_000_000;
+
+// Echte Anfragen haben zwei Dimensionen: IP und Konto. check_any fragt beide in einem Aufruf ab
+// und führt sie nach Strenge zusammen
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
+    // remaining lässt sich in X-RateLimit-* schreiben; **remaining == 0 heißt: diese Anfrage ablehnen**
+    ThrottleDecision::Allow { remaining } => { /* Restkontingent remaining */ }
+    // ab now >= until gilt die Sperre als aufgehoben
+    ThrottleDecision::Banned { until } => { /* gesperrt, Entsperrung bei until */ }
+    // Backend-Ausfall: dieses Modul entscheidet nicht für den Aufrufer (empfohlen: durchlassen + Alarm)
+    ThrottleDecision::Unavailable => { /* Ratenbegrenzungs-Backend nicht verfügbar */ }
+}
+
+// Fehlgeschlagene Authentifizierung zählen: ab threshold wird gesperrt. Liefert ThrottleOutcome
+// (zwei Zustände); ein Speicherfehler geht als Err zurück — kein toter Code für einen
+// Unavailable-Zweig, der nie ausgeführt wird
+let _ = throttle.record_failure(key, now);
+```
 
 ---
 
@@ -174,8 +302,11 @@ Die vollständige API-Referenz (Installation, selektive Scans, benutzerdefiniert
 # Build
 cargo build --release
 
-# Tests (462 Tests: 354 Unit-, 46 Integrations-, 62 Modul-Tests)
+# Tests (494: 365 Unit-Tests, 128 Integrationstests, 1 Dokumentationstest)
 cargo test
+
+# End-to-End-Pipeline-Beispiel (Scannen → Throttle → Sitzung → Maßnahme)
+cargo run --example waf
 
 # Lint
 cargo clippy -- -D warnings

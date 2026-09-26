@@ -2,7 +2,7 @@
 
 # security-rust API-Referenz
 
-[中文](../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [Deutsch (本页)](./API.md)
+[中文](../../../README.md) | [English](../en/API.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [Deutsch (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 Der einzige Vertrag aller Detektoren:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -41,7 +41,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### Schnellstart
@@ -124,19 +124,18 @@ if verdict.decision == Decision::Block {
 
 // Ratenbegrenzung — Defense-in-Depth: bei Backend-Ausfall Unavailable, nicht Banned
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
-match throttle.check("user:42", now) {
+match throttle.check("acct:user-42", now) {
     ThrottleDecision::Allow { remaining: 0 } => { /* ablehnen: Kontingent erschöpft */ }
     ThrottleDecision::Allow { .. } => { /* durchlassen */ }
     ThrottleDecision::Banned { until } => { /* gesperrt bis `until` */ }
     ThrottleDecision::Unavailable => { /* selbst entscheiden */ }
-
+}
 
 // Mehrere Dimensionen zusammenführen (z. B. IP + Konto): das strengste Ergebnis gewinnt
-let merged = throttle.check_any(&["ip:203.0.113.7", "user:42"], now);
-match throttle.record_failure("user:42", now) {
+let merged = throttle.check_any(&["ip:203.0.113.7", "acct:user-42"], now);
+match throttle.record_failure("acct:user-42", now) {
     Ok(outcome) => { /* ThrottleOutcome: Allow { remaining } | Banned { until } */ }
     Err(_) => { /* Speicherfehler */ }
-}
 }
 
 // Risikobewertung: Einzelsignale zu einer messbaren Größe aggregieren
@@ -181,6 +180,7 @@ Ein `RequestContext` wird vollständig vom Aufrufer befüllt: Die Bibliothek for
 | Protokoll | `src/protocol/` | 11 |
 | Daten | `src/data/` | 7 |
 | Datei | `src/file/` | 3 |
+| Haustier | `src/pet.rs` | — |
 
 ## Leistung
 

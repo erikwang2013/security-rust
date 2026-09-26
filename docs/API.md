@@ -13,8 +13,8 @@
 所有检测器的唯一契约：
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### 快速开始
@@ -143,8 +143,9 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 | 数据 | `src/data/` | `*Detector` 共 7 个 | 7 |
 | 文件 | `src/file/` | `PathTraversalDetector`、`UploadDetector`、`DataLeakDetector` | 3 |
 | 会话 | `src/session/` | `SessionGuard`、`RequestContext`、`SessionVerdict`、`Decision`、`SessionThreat`、`SessionConfig`、`SessionRecord`、`LoginPoint`、`SessionStore`、`MemoryStore`、`SessionError`、`StoreError` | — |
-| 限流 | `src/throttle/` | `Throttle`、`ThrottleConfig`、`ThrottleDecision`、`ThrottleStore`、`MemoryThrottleStore` | — |
+| 限流 | `src/throttle/` | `Throttle`、`ThrottleConfig`、`ThrottleDecision`、`ThrottleOutcome`、`ThrottleStore`、`MemoryThrottleStore` | — |
 | 评分 | `src/score.rs` | `RiskLevel`、`RiskAssessment`、`assess`、`score`、`total` | — |
+| 宠物 | `src/pet.rs` | `NAME`、`TAGLINE`、`ASCII`、`SVG` | — |
 
 `session` / `throttle` / `score` 的类型都从 crate 根 re-export（如 `use security_rust::{RiskLevel, SessionGuard, Throttle}`），也可走模块路径（如 `use security_rust::session::MemoryStore`）。两个例外：`score` 模块的 `score` / `total` 函数只从模块路径可达（`security_rust::score::score`），crate 根 re-export 的是 `assess`。
 

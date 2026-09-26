@@ -2,7 +2,7 @@
 
 # security-rust API Reference
 
-[中文](../../README.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [English (本页)](./API.md)
+[中文](../../../README.md) | [한국어](../ko/API.md) | [Русский](../ru/API.md) | [Deutsch](../de/API.md) | [Français](../fr/API.md) | [Español](../es/API.md) | [Português](../pt/API.md) | [हिन्दी](../hi/API.md) | [العربية](../ar/API.md) | [বাংলা](../bn/API.md) | [Bahasa Indonesia](../id/API.md) | [日本語](../ja/API.md) | [English (本页)](./API.md)
 
 ---
 
@@ -13,8 +13,8 @@
 The single contract for all detectors:
 
 ```rust
-pub trait Detector {
-    fn name(&self) -> &str;
+pub trait Detector: Send + Sync {
+    fn name(&self) -> &'static str;
     fn detect(&self, input: &str) -> Option<DetectionResult>;
 }
 ```
@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.0.0"
+security-rust = "2.1.0"
 ```
 
 ### Quick Start
@@ -153,6 +153,7 @@ The lower-level pieces are also public, under `security_rust::score`: `score(&[D
 | Session | `src/session/` `guard.rs` `store.rs` `geo.rs` | — |
 | Throttle | `src/throttle/` `guard.rs` `store.rs` | — |
 | Score | `src/score.rs` | — |
+| Pet | `src/pet.rs` | — |
 
 `session`, `throttle`, and `score` are re-exported from the crate root alongside the detectors.
 

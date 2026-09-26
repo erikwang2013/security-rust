@@ -2,9 +2,68 @@
 
 # security-rust
 
-**🌐 [中文 (原文)](../../README.md)**
+**🌐 [中文 (原文)](../../../README.md)**
 
 Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토콜 공격, 데이터/직렬화 공격, 파일/민감 데이터 유출 등 4개 대분류에 걸친 총 32개의 탐지기를 제공한다. 여기에 더해 세션 보안(`session`), 속도 제한 및 계정 차단(`throttle`), 위험 스코어링(`score`) 3개 모듈을 공개한다. 외부 프레임워크 의존성이 없으며, 의존 크레이트는 `regex` 하나뿐이다.
+
+프로젝트 펫 **甲哨 Sentri**([`pet.svg`](../../pet.svg)) —— 32장의 갑판이 32개 탐지기에 대응한다. 보고만 하고, 차단하지 않는다.
+
+---
+
+## 프로젝트 펫: 甲哨 Sentri
+
+<img src="../../pet.svg" alt="甲哨 Sentri —— security-rust 프로젝트 펫" width="340">
+
+돋보기와 팻말을 든 파수꾼 게. 이 모습은 장식이 아니라 이 라이브러리의 설계를 그대로 그린 것이다:
+
+| 모습 | 대응하는 설계 |
+|------|---------|
+| 등껍질의 4행 × 8장 갑판 | 32개의 무상태 탐지기. 4행 = 인젝션 / 프로토콜 / 데이터 / 파일 4대 분류 |
+| 왼쪽 집게의 돋보기 | **보는** 역할 —— `Detector::detect()`는 스캔만 하고, 적중하면 증거 하나를 반환한다 |
+| 오른쪽 집게의 팻말(`已上报` —— "보고 완료") | **보고하는** 역할 —— `DetectionResult`를 반환하며, 예외를 던지지도, 호출 체인을 끊지도 않는다 |
+| 집게는 절대 집지 않는다 | 판정권은 호출자에게 있다. 유일한 예외는 `SessionGuard`로, 이것은 정말로 `Block`한다 |
+| 외알 안경 | 감사자의 직업병 —— 모든 결론에 `matched_pattern`과 `offset`이 붙어 원문 위치까지 되짚을 수 있다 |
+| 명판의 `deps: regex ×1` | 제로 의존성 약속 —— `[dependencies]`는 언제나 `regex` 하나뿐이다 |
+
+좌우명: **보고만 하고, 차단하지 않는다.**
+
+이 모습은 `include_str!`로 크레이트에 포함된다(런타임 비용 제로, 쓰지 않으면 링크되지 않는다). ASCII 버전은 터미널이나 로그에 그대로 출력할 수 있다:
+
+```rust
+println!("{}", security_rust::pet::ASCII);
+```
+
+---
+
+## 프로젝트 구조
+
+```
+security-rust/
+├── src/
+│   ├── lib.rs              Detector trait(유일한 계약), regex_detect 헬퍼, 크레이트 문서
+│   ├── scanner.rs          Scanner / ScannerBuilder: 기본으로 32개 탐지기를 장착
+│   ├── result.rs           DetectionResult / AttackCategory / Severity
+│   ├── score.rs            위험 스코어링: 가중 합산 + 등급 구분 → RiskAssessment
+│   ├── pet.rs              프로젝트 펫(NAME / TAGLINE / ASCII / SVG)
+│   ├── injection/          인젝션 탐지기 11개
+│   ├── protocol/           프로토콜 탐지기 11개
+│   ├── data/               데이터 탐지기 7개
+│   ├── file/               파일 탐지기 3개
+│   ├── session/            SessionGuard + SessionStore(guard / store / geo)
+│   └── throttle/           Throttle + ThrottleStore(guard / store)
+├── tests/                  통합 테스트 7개 스위트: 세션, 속도 제한, 라이프사이클, 불변식, 견고성, 엔드투엔드, 다차원 속도 제한
+├── examples/
+│   ├── waf.rs              엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)
+│   └── axum_middleware.rs  axum 미들웨어 연동 레퍼런스
+├── docs/
+│   ├── API.md              전체 API 참조
+│   ├── OWASP-COVERAGE.md   OWASP 공격 분류별 커버리지 대조표
+│   ├── pet.svg             프로젝트 펫 이미지
+│   ├── diagrams/           아키텍처 / 기능 / 라이프사이클 3개 다이어그램(SVG)
+│   ├── i18n/               12개 언어 README와 API 문서
+│   └── ...                 후원 QR 코드, 코드 리뷰 및 테스트 보고서
+└── Cargo.toml              유일한 런타임 의존성: regex
+```
 
 ---
 
@@ -38,36 +97,12 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 
 ## 설계 아키텍처
 
-```
-                       ┌──────────────────────────────────┐
-                       │             Scanner              │
-                       │  ┌────────────────────────────┐  │
-    user input ───────►│  │ scan(input)                │  │      Vec<DetectionResult>
-                       │  │ scan_with(input, &[...])   │──┼──►──────────────────────►
-                       │  └─────────────┬──────────────┘  │
-                       │                │                  │
-                       │  ┌─────────────▼──────────────┐  │
-                       │  │   Vec<Box<dyn Detector>>   │  │
-                       │  │   ├─ XssDetector           │  │
-                       │  │   ├─ SqlInjectionDetector  │  │
-                       │  │   ├─ ... ×32               │  │
-                       │  └────────────────────────────┘  │
-                       └──────────────┬───────────────────┘
-                                      │
-       ┌──────────────────────────────┐
-       │       Detector trait         │
-       │  fn name(&self) -> &str      │
-       │  fn detect(&self, &str)      │
-       │       -> Option<Result>      │
-       └──────────────┬───────────────┘
-                      │
-       ┌──────────────┼──────────────┐
-       │              │              │
-  ┌────┴────┐  ┌──────┴──────┐  ┌───┴────┐  ┌────┴────┐
-  │injection│  │  protocol   │  │  data  │  │  file   │
-  │  11 个  │  │   11 个     │  │ 7 个   │  │  3 个   │
-  └─────────┘  └─────────────┘  └────────┘  └─────────┘
-```
+<img src="../../diagrams/architecture.svg" alt="security-rust 아키텍처: 호출자 → 탐지 계층 → 스코어링 계층 → 가드 계층 → 저장소" width="900">
+
+5개 계층을 위에서 아래로: **호출자**(WAF / 게이트웨이 / 감사 / CLI) → **탐지 계층**(`Scanner`가 `Vec<Box<dyn Detector>>`를 보유, 4대 분류 총 32개) → **스코어링 계층**(`score::assess`) → **가드 계층**(`SessionGuard` / `Throttle`, 각각 하나의 store trait에 묶인다) → **저장소 추상화**(내장 `MemoryStore`, Redis는 호출자가 구현).
+*(다이어그램 주석은 중국어이며, 레이블은 API 이름이다.)*
+
+`Detector` trait은 탐지 계층의 유일한 계약이다: `fn detect(&self, input: &str) -> Option<DetectionResult>`. `session`, `throttle`, `score`는 이를 구현하지 않는다 —— 입력이 단일 문자열이 아니거나(token + 핑거프린트 + 위치 + 시각), 원본 입력이 아니라 스캔 결과를 소비하기 때문에 각자 독립적으로 답한다(아래 참조). 그림 오른쪽의 붉은 반환선이 이 라이브러리의 경계다: **판정 결과는 호출자에게 돌아가 실행되며**, 라이브러리 자신은 요청을 건드리지 않는다.
 
 ### 모듈 역할
 
@@ -89,6 +124,11 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 ---
 
 ## 구현 기능
+
+<img src="../../diagrams/features.svg" alt="security-rust 기능도: 인젝션 11, 프로토콜 11, 데이터 7, 파일 3, 그리고 상태를 가진 3개 모듈" width="900">
+
+32개 탐지기는 4대 분류별로 장착되며 `Scanner::default()`로 설정 없이 전부 활성화된다. 아래 표는 각 탐지기가 커버하는 공격 패턴과 심각도를 나열한다. 심각도는 단일 적중의 위험만 나타내며, 집계된 전체 위험은 `Scanner::assess()`를 본다.
+*(다이어그램 주석은 중국어이며, 레이블은 API 이름이다.)*
 
 ### 인젝션 공격 (11개 탐지기)
 
@@ -144,6 +184,25 @@ Rust로 작성된 공격 탐지 라이브러리로, 인젝션 공격, 프로토�
 
 ---
 
+## 라이프사이클
+
+<img src="../../diagrams/lifecycle.svg" alt="security-rust의 3가지 라이프사이클: 스캔, 세션, 속도 제한" width="900">
+
+세 라이프사이클은 서로 독립적이며, 유일한 교차점은 호출자의 요청 처리 함수다:
+
+| 라이프사이클 | 시작 | 끝 | 상태 저장 위치 |
+|---------|------|------|---------|
+| **스캔** | `Scanner::scan(&str)` | `Vec<DetectionResult>` → `score::assess` → `RiskAssessment` | 무상태, 호출마다 독립 |
+| **세션** | `SessionGuard::bind()`가 `SessionRecord`를 기록 | 요청마다 `verify()` → `SessionVerdict` ⇒ `Allow` / `Challenge` / `Block` | `SessionStore`(내장 `MemoryStore`) |
+| **속도 제한** | `Throttle::check_any(&[keys])` | `Allow{remaining}` / `Banned{until}` / `Unavailable` | `ThrottleStore`(내장 `MemoryThrottleStore`) |
+
+쉽게 틀리는 두 경계:
+
+- **`remaining == 0`은 이 요청을 거부해야 한다는 뜻이다** —— 할당량이 소진된 것이지 "한 번 더 시도할 수 있다"는 뜻이 아니다. `X-RateLimit-*`에 쓸 때 반대로 쓰지 말 것.
+- **저장소 장애 처리는 양쪽이 반대다**: `SessionGuard`는 fail-closed(`StoreUnavailable` ⇒ `Block`, 절대 통과시키지 않는다. 그렇지 않으면 공격자가 장애를 유도하는 것만으로 판정 한 종류를 통째로 바꿀 수 있다), `Throttle`은 fail-open(`Unavailable`을 호출자에게 넘긴다. 백엔드가 흔들릴 때 전체 사용자를 막는 것은 자기 DoS이며, 주 게이트인 `SessionGuard`가 여전히 막고 있다). 이는 설계로 못 박은 것이지 빠뜨린 안전장치가 아니다.
+
+---
+
 ## 사용 방법
 
 설정 없이 바로 사용할 수 있다:
@@ -156,7 +215,70 @@ let results = scanner.scan("<script>alert('xss')</script>");
 // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
 ```
 
-전체 API 참조(설치, 선택적 스캔, 커스텀 구성, 심각도 표시, 성능)는 [API 참조](./API.md)를 참고하라.
+위험 스코어링은 적중 목록을 하나의 등급으로 모아, 여러 저위험 신호가 조용히 무시되지 않게 한다:
+
+```rust
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+// assessment.level   >= RiskLevel::High
+// assessment.results >= 3
+// assessment.score   — 원시 가중 점수
+```
+
+전체 API 참조(설치, 선택적 스캔, 커스텀 구성, 위험 스코어링, 심각도 표시, 세션 보안, 속도 제한과 차단, 성능)는 [API 참조](./API.md)를 참고하라.
+
+### 세션 보안 (`session`)
+
+```rust
+use security_rust::session::{Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard};
+
+let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
+
+let login = RequestContext {
+    token: "tok-abc",
+    subject: "u-1",
+    fingerprint: "ip=1.2.3.4|ua=curl",   // 클라이언트 핑거프린트. 로그인 시 바인딩
+    location: Some("CN-BJ"),
+    coords: Some((39.9042, 116.4074)),
+    signature: None,                      // MAC은 호출자가 서명한다
+    at: None,
+};
+
+// 로그인: 세션 생성 + 핑거프린트 바인딩 + 위치 기록. 다른 지역은 verdict에만 영향하고 로그인을 막지 않는다
+guard.bind(&login, 1_700_000_000).unwrap();
+
+// 요청마다 검증: 같은 token인데 핑거프린트가 다르면 ⇒ 클라이언트 탈취
+let verdict = guard.verify(&RequestContext { fingerprint: "ip=5.6.7.8|ua=curl", ..login }, 1_700_000_010);
+
+match verdict.decision {
+    Decision::Allow => { /* 통과 */ }
+    Decision::Challenge => { /* 통과하되 2차 검증 요구: 다른 지역, 시계 오차, 서명 불일치 */ }
+    Decision::Block => { /* 거부 */ }
+}
+```
+
+### 속도 제한과 차단 (`throttle`)
+
+```rust
+use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision};
+
+let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+let key = "acct:u-1"; // key는 호출자가 만들고 정규화한다. 원본 입력을 그대로 key로 쓰지 말 것
+let now = 1_700_000_000;
+
+// 실제 요청에는 IP와 계정 두 차원이 있다. check_any가 한 번에 질의하고 엄격도 순으로 병합한다
+match throttle.check_any(&["ip:1.2.3.4", key], now) {
+    // remaining은 X-RateLimit-*에 실을 수 있다. **remaining == 0은 이 요청을 거부해야 한다는 뜻**
+    ThrottleDecision::Allow { remaining } => { /* 남은 할당량 remaining */ }
+    // now >= until이면 해제된 것으로 본다
+    ThrottleDecision::Banned { until } => { /* 차단 중, until에 해제 */ }
+    // 백엔드 장애: 이 모듈은 호출자 대신 결정하지 않는다(통과 + 경고 권장)
+    ThrottleDecision::Unavailable => { /* 속도 제한 백엔드 사용 불가 */ }
+}
+
+// 인증 실패를 기록: threshold에 도달하면 차단. 반환은 ThrottleOutcome(2가지 상태)이고,
+// 저장소 장애는 Err로 간다 —— 결코 실행되지 않을 Unavailable 분기를 위해 코드를 쓰지 않아도 된다
+let _ = throttle.record_failure(key, now);
+```
 
 ---
 
@@ -166,8 +288,11 @@ let results = scanner.scan("<script>alert('xss')</script>");
 # 빌드
 cargo build --release
 
-# 테스트(유닛 354 + 통합 46 + session 25 + session 라이프사이클 15 + throttle 22 = 462)
+# 테스트(494개: 유닛 365 + 통합 128 + 문서 테스트 1)
 cargo test
+
+# 엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)
+cargo run --example waf
 
 # 코드 검사
 cargo clippy -- -D warnings
