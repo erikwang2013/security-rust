@@ -43,7 +43,7 @@ pub struct DetectionResult {
 
 ```toml
 [dependencies]
-security-rust = "2.1.0"
+security-rust = "2.1.1"
 ```
 
 ### بداية سريعة
