@@ -11,6 +11,14 @@ repository = "https://github.com/erikwang2013/security-rust"
 authors = ["erik <erik@erik.xyz>"]
 keywords = ["security", "security-rust", "xss", "sql-injection", "waf"]
 categories = ["security", "parsing"]
+# 随包只发「读代码 / 用库」要用的东西。`docs/pet.svg` 不能排 —— src/pet.rs 用
+# include_str! 内联它，排掉就编译不过（cargo package 会当场报错，不会静默漏发）。
+exclude = [
+    "CLAUDE.md",         # 仓库的 agent 配置，与使用者无关
+    "docs/coin",         # 打赏码原图 ~1.2MB
+    "docs/i18n",         # 12 语言文档 ~2.1MB，仓库内有效、包内无引用
+    "docs/superpowers",  # 设计与计划留档（流程产物）
+]
 
 [dependencies]
 regex = "1"
