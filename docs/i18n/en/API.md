@@ -72,7 +72,7 @@ The test is the **shape**, not the file name: for the same `../`, a single level
 
 ```toml
 [dependencies]
-security-rust = "2.1.1"
+security-rust = "3.0.0"
 ```
 
 ### Quick Start

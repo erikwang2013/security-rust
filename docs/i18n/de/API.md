@@ -70,7 +70,7 @@ Entscheidend ist die **Form**, nicht der Dateiname: Bei demselben `../` meldet e
 
 ```toml
 [dependencies]
-security-rust = "2.1.1"
+security-rust = "3.0.0"
 ```
 
 ### Schnellstart

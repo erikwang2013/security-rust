@@ -72,7 +72,7 @@ Kriterianya adalah **bentuk**, bukan nama berkas: untuk `../` yang sama, satu ti
 
 ```toml
 [dependencies]
-security-rust = "2.1.1"
+security-rust = "3.0.0"
 ```
 
 ### Mulai Cepat
