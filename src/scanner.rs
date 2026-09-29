@@ -127,7 +127,12 @@ mod tests {
     use super::*;
     use crate::{AttackCategory, Severity};
 
+    /// 弱信号载荷：`<script>` 的存在本身在正常网页里极常见，故判 Low。
     const XSS: &str = "<script>alert(1)</script>";
+
+    /// 强信号载荷：事件处理器是攻击者可控的可执行形态，判 Critical。
+    /// 需要走 Critical 路径的测试用这个，别把 `XSS` 改判 —— 那会让测试名说谎。
+    const XSS_CRITICAL: &str = "<img src=x onerror=alert(1)>";
 
     fn types(results: &[DetectionResult]) -> Vec<&str> {
         results.iter().map(|r| r.attack_type.as_str()).collect()
@@ -208,10 +213,34 @@ mod tests {
 
     #[test]
     fn assess_returns_critical_for_critical_hit() {
-        let a = Scanner::default().assess(XSS);
+        let a = Scanner::default().assess(XSS_CRITICAL);
         assert_eq!(a.level, crate::score::RiskLevel::Critical);
         assert_eq!(a.results, 1);
         assert!(a.score > 0);
+    }
+
+    /// 分档契约：标签「存在」是弱信号，报 Low 且不足以触发拒绝；
+    /// 事件处理器是强信号，报 Critical 且直接拒绝。
+    /// 这条钉住的是「正常网页不该被拒」这个产品行为。
+    #[test]
+    fn tag_presence_is_low_while_event_handler_is_critical() {
+        let scanner = Scanner::default();
+
+        let weak = scanner.scan(XSS);
+        assert_eq!(weak.len(), 1);
+        assert_eq!(weak[0].attack_type, "xss");
+        assert_eq!(weak[0].severity, Severity::Low);
+        assert!(
+            scanner.assess(XSS).level < crate::score::RiskLevel::High,
+            "标签存在不得单独越线"
+        );
+
+        let strong = scanner.scan(XSS_CRITICAL);
+        assert_eq!(strong[0].severity, Severity::Critical);
+        assert_eq!(
+            scanner.assess(XSS_CRITICAL).level,
+            crate::score::RiskLevel::Critical
+        );
     }
 
     #[test]
@@ -228,7 +257,7 @@ mod tests {
 
     #[test]
     fn scan_detects_known_attack() {
-        let results = Scanner::default().scan(XSS);
+        let results = Scanner::default().scan(XSS_CRITICAL);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].attack_type, "xss");
         assert_eq!(results[0].category, AttackCategory::Injection);

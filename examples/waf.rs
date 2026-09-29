@@ -261,7 +261,9 @@ fn requests() -> Vec<Request<'static>> {
             title: "REQ-3 XSS",
             ip: "198.51.100.5",
             account: "alice",
-            payload: "/comment?body=<script>alert(document.cookie)</script>",
+            // 用事件处理器而不是裸 `<script>`：标签「存在」是弱信号（正常网页都有外链
+            // 脚本），报 Low 不足以拒绝；`onerror=` 才是攻击者可控的执行形态。
+            payload: "/comment?body=<img src=x onerror=alert(document.cookie)>",
             password_ok: true,
             ctx: alice("tok-alice-1", FP_ALICE, "CN-BJ", T0 + 3),
         },

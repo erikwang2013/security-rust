@@ -9,7 +9,10 @@ fn test_xss_script_tag() {
     assert!(!results.is_empty());
     let r = &results[0];
     assert_eq!(r.attack_type, "xss");
-    assert_eq!(r.severity, Severity::Critical);
+    // 标签「存在」是弱信号：`<script src="/app.js">` 每个正常网页都有，
+    // 故报 Low 而不单独触发拒绝。强信号（`onerror=` 等）仍是 Critical，
+    // 见 src/scanner.rs::tag_presence_is_low_while_event_handler_is_critical。
+    assert_eq!(r.severity, Severity::Low);
 }
 
 #[test]
@@ -44,12 +47,20 @@ fn test_command_injection_backtick() {
     assert_eq!(results[0].attack_type, "command_injection");
 }
 
+/// 弱信号分档：`$(cmd)` 与 Markdown 表格 / URL 查询串 / JS 表达式在字节层面同形，
+/// 正则无法区分，故 `\$\([^)]+\)` 收在弱档 —— 仍被检出（不丢检测能力），
+/// 但报 Low、不再单独触发调用方的拒绝线。强信号（反引号以外的 shell 形态）另见
+/// `test_command_injection_backtick`。
 #[test]
-fn test_command_injection_dollar_paren() {
+fn test_command_injection_dollar_paren_is_low_and_does_not_reject() {
     let scanner = Scanner::default();
-    let results = scanner.scan("$(rm -rf /)");
-    assert!(!results.is_empty());
-    assert_eq!(results[0].attack_type, "command_injection");
+    let hit = scanner
+        .scan("$(rm -rf /)")
+        .into_iter()
+        .find(|r| r.attack_type == "command_injection")
+        .expect("弱信号也应被检出，只是不拒绝");
+    assert_eq!(hit.severity, Severity::Low);
+    assert!(scanner.assess("$(rm -rf /)").level < security_rust::RiskLevel::High);
 }
 
 #[test]
@@ -101,8 +112,10 @@ fn test_jndi_obfuscated() {
 fn test_ssi_injection() {
     let scanner = Scanner::default();
     let results = scanner.scan("<!--#exec cmd=\"cat /etc/passwd\"-->");
-    assert!(!results.is_empty());
-    assert_eq!(results[0].attack_type, "ssi_injection");
+    // 不依赖注册顺序：这条载荷同时含 SSI 语法和 `cat /etc/passwd`（弱档也会命中），
+    // 谁排 results[0] 由 scanner.rs 的注册顺序决定，断言只应关心「是否检出」。
+    let types: Vec<&str> = results.iter().map(|r| r.attack_type.as_str()).collect();
+    assert!(types.contains(&"ssi_injection"), "实际命中: {types:?}");
 }
 
 #[test]

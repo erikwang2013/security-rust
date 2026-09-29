@@ -40,12 +40,27 @@ pub trait SessionStore: Send + Sync {
     /// 该 subject 的登录历史，按时间升序（最旧在前）。
     fn recent_logins(&self, subject: &str) -> Result<Vec<LoginPoint>, StoreError>;
     fn record_login(&self, subject: &str, point: LoginPoint) -> Result<(), StoreError>;
-    /// 清除已过期记录，返回清除条数。
+    /// 清除已过期记录，并回收超过 [`LOGIN_HISTORY_KEEP_SECS`] 未再登录的
+    /// subject 的登录历史；返回清除的会话条数。
     fn purge_expired(&self, now: u64) -> Result<usize, StoreError>;
 }
 
 /// 每个 subject 保留的登录历史条数上限。
 pub const MAX_LOGINS_PER_SUBJECT: usize = 10;
+
+/// 登录历史的保留时长（秒）：超过这段时间没有新登录点的 subject，
+/// 其登录历史会在 [`SessionStore::purge_expired`] 时整条删除。
+///
+/// **取舍**：历史只在 `bind` / `verify` 里被读其中的 `last()` 一条，因此回收一个
+/// 休眠 subject 的历史，代价是他的**下一次登录少做一次异地 / 不可能旅行判定**
+/// （之后历史立即重建）。这是漏报而非误报——`location_changed` 缺输入返回
+/// `false`、`impossible_travel` 缺输入返回 `None`，删掉输入只会让结论变成「不报」。
+/// 这个常量就是旋钮：调大 = 更不容易漏报、内存占用更高。
+///
+/// 取 7 天是宽裕余量：地表最远两点约 20000 km，默认 900 km/h 阈值下不可能旅行
+/// 判定在约 22 小时后本就不可能成立。单 subject 的历史条数由
+/// [`MAX_LOGINS_PER_SUBJECT`] 限死，**无上限的是 subject 数量**，只能靠这个时间窗口回收。
+pub const LOGIN_HISTORY_KEEP_SECS: u64 = 604_800;
 
 /// 内存后端。无后台线程 —— 过期判定归 guard，内存回收靠 `purge_expired`。
 #[derive(Debug)]
@@ -135,7 +150,15 @@ impl SessionStore for MemoryStore {
         let mut g = Self::lock(&self.sessions);
         let before = g.len();
         g.retain(|_, r| r.expires_at > now);
-        Ok(before - g.len())
+        let removed = before - g.len();
+        drop(g);
+
+        // 登录历史没有 expires_at 可依，按最后一个登录点的年龄回收。
+        // 扫全量而非取 `v.last()`：`at` 只在时钟单调时才随插入递增，回拨会让
+        // `last()` 指向更旧的点，把窗口内仍有效的历史整条丢掉。
+        let horizon = now.saturating_sub(LOGIN_HISTORY_KEEP_SECS);
+        Self::lock(&self.logins).retain(|_, v| v.iter().any(|p| p.at > horizon));
+        Ok(removed)
     }
 }
 
@@ -292,6 +315,45 @@ mod tests {
     fn purge_expired_on_empty_is_zero() {
         let s = MemoryStore::new();
         assert_eq!(s.purge_expired(1_000).unwrap(), 0);
+    }
+
+    #[test]
+    fn purge_expired_reclaims_dormant_login_history() {
+        // 登录历史此前只增不减：凭据填充 / 换用户名爆破每个 subject 永久占一份条目。
+        // 这里钉住回收路径 —— 没有它，purge_expired 对 logins 完全无效。
+        let s = MemoryStore::new();
+        let now = 10_000_000;
+        let stale = now - LOGIN_HISTORY_KEEP_SECS;
+        s.record_login("dormant", point("CN-BJ", stale - 1))
+            .unwrap();
+        // 窗口边界（恰好在 horizon 上）同样算休眠，与 sessions 的 `expires_at > now` 一致
+        s.record_login("edge", point("CN-BJ", stale)).unwrap();
+        s.record_login("active", point("CN-SH", now - 10)).unwrap();
+
+        assert_eq!(s.purge_expired(now).unwrap(), 0, "无过期会话");
+
+        assert!(s.recent_logins("dormant").unwrap().is_empty());
+        assert!(s.recent_logins("edge").unwrap().is_empty());
+        assert_eq!(s.recent_logins("active").unwrap().len(), 1);
+        // 「删掉键」才算真的回收，空 Vec 仍会占住 map 条目
+        assert_eq!(MemoryStore::lock(&s.logins).len(), 1);
+    }
+
+    #[test]
+    fn purge_expired_keeps_history_after_clock_rollback() {
+        let s = MemoryStore::new();
+        let now = 10_000_000;
+        // 时钟回拨：后写入的点 at 反而更小，`last()` 会指向窗口外的那条
+        s.record_login("u1", point("CN-BJ", now - 10)).unwrap();
+        s.record_login("u1", point("CN-BJ", now - 2 * LOGIN_HISTORY_KEEP_SECS))
+            .unwrap();
+
+        assert_eq!(s.purge_expired(now).unwrap(), 0);
+        assert_eq!(
+            s.recent_logins("u1").unwrap().len(),
+            2,
+            "取 last() 会把窗口内仍有效的历史整条丢掉"
+        );
     }
 
     #[test]

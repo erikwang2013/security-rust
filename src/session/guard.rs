@@ -130,10 +130,11 @@ impl<S: SessionStore> SessionGuard<S> {
         }
 
         // 重放：请求自称时间偏离窗口
-        if let Some(at) = ctx.at {
-            if now.abs_diff(at) > self.config.timestamp_skew_secs {
-                threats.push(SessionThreat::TimestampSkew);
-            }
+        if ctx
+            .at
+            .is_some_and(|at| now.abs_diff(at) > self.config.timestamp_skew_secs)
+        {
+            threats.push(SessionThreat::TimestampSkew);
         }
 
         // 异地：与会话记录的位置比对
@@ -149,12 +150,10 @@ impl<S: SessionStore> SessionGuard<S> {
                     coords: geo::sanitize_coords(ctx.coords),
                     at: now,
                 };
-                if let Some(prev) = history.last() {
-                    if let Some(kmh) =
-                        geo::impossible_travel(prev, &current, self.config.impossible_travel_kmh)
-                    {
-                        threats.push(SessionThreat::ImpossibleTravel { kmh });
-                    }
+                if let Some(kmh) = history.last().and_then(|prev| {
+                    geo::impossible_travel(prev, &current, self.config.impossible_travel_kmh)
+                }) {
+                    threats.push(SessionThreat::ImpossibleTravel { kmh });
                 }
             }
             // fail-closed：历史读不到时静默跳过，等于「后端一坏，异地检测就关」，
@@ -165,7 +164,9 @@ impl<S: SessionStore> SessionGuard<S> {
         }
 
         if threats.is_empty() {
-            // 只有放行时才刷新活跃度：被拦的请求不该延长会话寿命
+            // 只有放行时才刷新 last_seen：被拦的请求不该留下「刚刚还活跃」的观测。
+            // 注意这只影响 last_seen 这一个观测值 —— `expires_at` 只在 bind / rotate
+            // 写入、verify 从不延长，TTL 是绝对的，因此这里与「会话寿命」无关。
             let _ = self.store.touch(ctx.token, now);
             return SessionVerdict::allow();
         }
@@ -223,6 +224,15 @@ impl<S: SessionStore> SessionGuard<S> {
 
         Ok(())
     }
+
+    /// 清除已过期记录，返回清除条数。
+    ///
+    /// 内存后端无后台线程，map 条目只增不减；长期运行的进程需按 `ttl_secs`
+    /// 量级的间隔定时调用（同时回收休眠 subject 的登录历史，见
+    /// [`LOGIN_HISTORY_KEEP_SECS`](super::store::LOGIN_HISTORY_KEEP_SECS)）。
+    pub fn purge_expired(&self, now: u64) -> Result<usize, StoreError> {
+        self.store.purge_expired(now)
+    }
 }
 
 /// 常数时间字节比较。
@@ -246,7 +256,7 @@ pub(crate) fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::Decision;
-    use super::super::store::MemoryStore;
+    use super::super::store::{LOGIN_HISTORY_KEEP_SECS, MemoryStore};
     use super::*;
 
     const NOW: u64 = 1_000_000;
@@ -414,8 +424,24 @@ mod tests {
         assert_eq!(
             g.store.get("t1").unwrap().unwrap().last_seen,
             NOW,
-            "被拦的请求不该延长会话寿命"
+            "被拦的请求不该刷新 last_seen 观测（TTL 绝对，本就不受影响）"
         );
+    }
+
+    #[test]
+    fn purge_expired_reaches_the_store() {
+        let g = guard();
+        g.bind(&ctx("t1", "u1", FP), NOW).unwrap();
+
+        // 未过期：会话与登录历史都留着
+        assert_eq!(g.purge_expired(NOW).unwrap(), 0);
+        assert!(g.store.get("t1").unwrap().is_some());
+
+        // 过期后：委派真的落到了 store 上 —— 会话被清，休眠的登录历史也被回收
+        let later = NOW + 3_600 + LOGIN_HISTORY_KEEP_SECS + 1;
+        assert_eq!(g.purge_expired(later).unwrap(), 1);
+        assert!(g.store.get("t1").unwrap().is_none());
+        assert!(g.store.recent_logins("u1").unwrap().is_empty());
     }
 
     #[test]

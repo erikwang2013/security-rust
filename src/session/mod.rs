@@ -1,6 +1,6 @@
 // Copyright (c) 2026 erik <erik@erik.xyz> — https://erik.xyz
 
-pub mod geo;
+mod geo;
 pub mod guard;
 pub mod store;
 

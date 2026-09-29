@@ -9,24 +9,28 @@ use std::sync::LazyLock;
 // 分隔符只留 `.`/`-`/`_`/`:`：`,` 和空格是 printf 模板的常规分隔
 // （`printf("%s, %s, %s, %s\n", ...)`、`INSERT INTO t VALUES (%s, %s, %s, %s)`），
 // 放进来等于把正常 SQL/printf 模板全打成注入。
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
+/// 6 条分支合并成 1 条 alternation —— `regex_detect` 对列表里每条 `Regex` 各跑一次
+/// `find`，干净输入下 6 次全文扫描变 1 次。分支顺序 = 原 vec 顺序（同一位置上取最左
+/// 分支；与「按列表顺序取第一条命中的模式」相比偏移量可能不同，档位不变）。
+static PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
         // %n / %hn / %lln / %1$n：唯一能写内存的转换符。
         // 前边界排除数字：`100%n`、`50%n/a` 是百分比串（还是它们真的想 printf `100%n`？）
         // ——按"误报比漏报更糟"取舍，紧跟在数字后面的 %n 放过。
-        Regex::new(r"(?:^|[^0-9])%(?:\d{1,9}\$)?(?:hh|h|ll|l|L|z|j|t|q)?n\b").unwrap(),
+        r"(?:^|[^0-9])%(?:\d{1,9}\$)?(?:hh|h|ll|l|L|z|j|t|q)?n\b",
         // 宽度炸弹：%99999999d
-        Regex::new(r"%\d{6,}[diouxXeEfgGaAcspn]").unwrap(),
+        r"|%\d{6,}[diouxXeEfgGaAcspn]",
         // %x%x%x / %p%p%p：连续读栈（中间没有分隔符，3 个就够）
-        Regex::new(r"(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[xXp]){3,}").unwrap(),
+        r"|(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[xXp]){3,}",
         // %08x.%08x.%08x.%08x：带分隔的读栈。`.` 在正常格式串里常见（日期、UUID），
         // 所以阈值提到 4——`%08x.%08x.%08x` 那个量级是格式串，不是栈转储。
-        Regex::new(r"(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[xXp][.\-_:]?){4,}").unwrap(),
+        r"|(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[xXp][.\-_:]?){4,}",
         // 四个以上连续 %s：挨个读栈上字符串
-        Regex::new(r"(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?s[.\-_:]{0,2}){4,}").unwrap(),
+        r"|(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?s[.\-_:]{0,2}){4,}",
         // 混合连续泄露：%s%x%p%n 这类穿插写法
-        Regex::new(r"(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[sxXp][.\-_:]{0,2}){6,}").unwrap(),
-    ]
+        r"|(?:%[0-9]{0,4}(?:hh|h|ll|l|L|z|j|t|q)?[sxXp][.\-_:]{0,2}){6,}",
+    ))
+    .unwrap()
 });
 
 pub struct FormatStringDetector;
@@ -38,7 +42,7 @@ impl Detector for FormatStringDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*PATTERNS),
             self.name(),
             AttackCategory::Injection,
             Severity::Medium,

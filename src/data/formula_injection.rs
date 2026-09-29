@@ -14,25 +14,37 @@ use std::sync::LazyLock;
 // `regex` crate 没有反向断言，写不出"排除这几个名字"，只能反过来列公式函数。
 const AT_FUNCS: &str = "SUM|HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC|AVERAGE|COUNT|MIN|MAX";
 
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        // =cmd|' /C calc'!A0：命令管道。锚点带上单元格边界——CSV 一行多个字段，
-        // 载荷常出现在 `admin,=cmd|...` 这种第 2 个字段里。
-        // `cmd` 后面必须紧跟 `|`：`- cmd | run the build` 是文档里的命令列表。
-        // 带空格的 `=cmd | ...!A0` 由下面第 3 条（要单元格引用）兜住。
-        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][ \t]*cmd\|").unwrap(),
-        // 能外带数据或触发本地程序的内置函数
-        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][ \t]*(?:HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC)[ \t]*\(").unwrap(),
-        // 任意二进制 + DDE 单元格引用：=rundll32|...!A0、=2+5+cmd|...!A0。
-        // `!A1` 前面必须是紧挨着的非空白字符（`'!A0`、`"!A0`）——散文里的
-        // `- 参见 RFC 1234 | 以及 !A1` 中间有空格，是文字不是单元格引用。
-        Regex::new(r"(?im)(?:^|[,;])[ \t]*[=+\-@][^\n|]{0,120}\|[^\n]{0,120}[^ \t\n]![A-Z]{1,3}\$?\d{1,5}").unwrap(),
-        // DDE( 载荷
-        Regex::new(r"(?i)\bDDE[ \t]*\(").unwrap(),
-        // legacy @ 前缀公式：@SUM( 等。故意不加 (?i)——小写 @media( 之类是 CSS。
-        // 函数名走名录，任意全大写标识符会命中注解。
-        Regex::new(&[r"(?m)(?:^|[,;])[ \t]*@[ \t]*(?:", AT_FUNCS, r")[ \t]*\("].concat()).unwrap(),
-    ]
+/// 5 条分支合并成 1 条 alternation —— `regex_detect` 对列表里每条 `Regex` 各跑一次
+/// `find`，干净输入下 5 次全文扫描变 1 次。分支顺序 = 原 vec 顺序（同一位置上取最左
+/// 分支；与「按列表顺序取第一条命中的模式」相比偏移量可能不同，档位不变）。
+/// 各分支 flags **不一致**（前三条 `(?im)`、DDE 只 `(?i)`、`@` 函数名录故意只 `(?m)`），
+/// 故每条各自裹进 `(?…:…)` —— 裸 `(?im)` 的作用域会顺延到后面拼进来的分支，
+/// `@sum(`、`@ImportXML(` 就会被前一条的 `i` 变成命中（CSS 的 `@media(` 正是这类）。
+static PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        &[
+            // =cmd|' /C calc'!A0：命令管道。锚点带上单元格边界——CSV 一行多个字段，
+            // 载荷常出现在 `admin,=cmd|...` 这种第 2 个字段里。
+            // `cmd` 后面必须紧跟 `|`：`- cmd | run the build` 是文档里的命令列表。
+            // 带空格的 `=cmd | ...!A0` 由下面第 3 条（要单元格引用）兜住。
+            r"(?im:(?:^|[,;])[ \t]*[=+\-@][ \t]*cmd\|)",
+            // 能外带数据或触发本地程序的内置函数
+            r"|(?im:(?:^|[,;])[ \t]*[=+\-@][ \t]*(?:HYPERLINK|IMPORTXML|IMPORTDATA|IMPORTRANGE|IMPORTFEED|WEBSERVICE|FILTERXML|RTD|EXEC)[ \t]*\()",
+            // 任意二进制 + DDE 单元格引用：=rundll32|...!A0、=2+5+cmd|...!A0。
+            // `!A1` 前面必须是紧挨着的非空白字符（`'!A0`、`"!A0`）——散文里的
+            // `- 参见 RFC 1234 | 以及 !A1` 中间有空格，是文字不是单元格引用。
+            r"|(?im:(?:^|[,;])[ \t]*[=+\-@][^\n|]{0,120}\|[^\n]{0,120}[^ \t\n]![A-Z]{1,3}\$?\d{1,5})",
+            // DDE( 载荷
+            r"|(?i:\bDDE[ \t]*\()",
+            // legacy @ 前缀公式：@SUM( 等。故意不加 (?i)——小写 @media( 之类是 CSS。
+            // 函数名走名录，任意全大写标识符会命中注解。
+            r"|(?m:(?:^|[,;])[ \t]*@[ \t]*(?:",
+            AT_FUNCS,
+            r")[ \t]*\()",
+        ]
+        .concat(),
+    )
+    .unwrap()
 });
 
 pub struct FormulaInjectionDetector;
@@ -44,7 +56,7 @@ impl Detector for FormulaInjectionDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*PATTERNS),
             self.name(),
             AttackCategory::Data,
             Severity::High,

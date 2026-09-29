@@ -103,7 +103,9 @@ pub(crate) mod test_helpers {
     }
 
     pub(crate) fn assert_clean<D: Detector>(d: &D, input: &str) {
-        assert!(d.detect(input).is_none(), "not detected: {input:?}");
+        // 断言是「必须干净」，所以只有在**检出**时才会 panic —— 报错信息必须
+        // 说明是误报，而不是"未检出"（旧文案正好说反，读起来与事实相反）。
+        assert!(d.detect(input).is_none(), "expected clean, but detected: {input:?}");
     }
 }
 

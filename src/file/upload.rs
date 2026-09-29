@@ -5,24 +5,38 @@ use std::sync::LazyLock;
 
 use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r"(?i)<\?php").unwrap(),
-        Regex::new(r"(?i)<\?=").unwrap(),
-        Regex::new(r"(?i)<%\s*@").unwrap(),
-        Regex::new(r"(?i)<%\s*=").unwrap(),
-        Regex::new(r#"(?i)<script\s+language\s*=\s*["']?(?:php|vbscript|jscript)["']?"#).unwrap(),
-        Regex::new(r"(?i)eval\s*\(\s*\$").unwrap(),
-        Regex::new(r"(?i)system\s*\(\s*\$").unwrap(),
-        Regex::new(r"(?i)exec\s*\(\s*\$").unwrap(),
-        Regex::new(r"(?i)passthru\s*\(\s*\$").unwrap(),
-        Regex::new(r"(?i)shell_exec\s*\(\s*\$").unwrap(),
-        Regex::new(r"(?i)\$_GET\[").unwrap(),
-        Regex::new(r"(?i)\$_POST\[").unwrap(),
-        Regex::new(r"(?i)\$_REQUEST\[").unwrap(),
-        Regex::new(r"(?i)\$_SERVER\[").unwrap(),
-        Regex::new(r"(?i)base64_decode\s*\(").unwrap(),
-    ]
+/// webshell 特征：**文件本身就是检出项**，不是一个碰巧出现的 token。`<?php`/`<%@` 的
+/// 唯一读法就是「这是可被服务端执行的代码」——与 `data_leak` 的 PAN 同类，出现即泄露。
+///
+/// 故这一档不设强弱分层：JSP 页面与 JSP webshell 的前导字节逐字节相同
+/// （`<%@ page language="java" … %>` 与 `<%@ page import="java.io.*" %>` 同一形态），
+/// 把 `<%@`/`<%=` 降档等于让 webshell 落到拒绝线以下 —— 那是换个方式删检测。
+/// 代价是扫描**正在对外提供的**页面（而不是上传的文件）也会命中；那属于输入域不符，
+/// 消息文案 `Malicious file upload detected` 已点明域。
+/// 十五条分支合成一条 alternation。flags **完全一致**（都是 `(?i)`），
+/// 提到最前面即可，无需逐条包裹。
+static PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        &[
+            r"(?i)<\?php",
+            r"|<\?=",
+            r"|<%\s*@",
+            r"|<%\s*=",
+            r#"|<script\s+language\s*=\s*["']?(?:php|vbscript|jscript)["']?"#,
+            r"|eval\s*\(\s*\$",
+            r"|system\s*\(\s*\$",
+            r"|exec\s*\(\s*\$",
+            r"|passthru\s*\(\s*\$",
+            r"|shell_exec\s*\(\s*\$",
+            r"|\$_GET\[",
+            r"|\$_POST\[",
+            r"|\$_REQUEST\[",
+            r"|\$_SERVER\[",
+            r"|base64_decode\s*\(",
+        ]
+        .concat(),
+    )
+    .unwrap()
 });
 
 pub struct UploadDetector;
@@ -34,7 +48,7 @@ impl Detector for UploadDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*PATTERNS),
             self.name(),
             AttackCategory::File,
             Severity::Critical,

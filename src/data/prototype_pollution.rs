@@ -4,18 +4,35 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r"(?i)__proto__").unwrap(),
-        Regex::new(r"(?i)constructor\[").unwrap(),
-        Regex::new(r"(?i)constructor\.prototype").unwrap(),
-        Regex::new(r"(?i)__defineGetter__").unwrap(),
-        Regex::new(r"(?i)__defineSetter__").unwrap(),
-        Regex::new(r"(?i)__lookupGetter__").unwrap(),
-        Regex::new(r"(?i)__lookupSetter__").unwrap(),
-        Regex::new(r"(?i)hasOwnProperty\[").unwrap(),
-    ]
+/// 强信号：污染必须带**写入**形态。`__proto__` 作为键（`"__proto__":`、
+/// `[__proto__]`）或被赋值（`__proto__ = x`）才是污染；裸 token 不是。
+static STRONG_PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    // 九条分支的 flags 完全一致（都是 `(?i)`），提到最前面即可。
+    Regex::new(
+        &[
+            // 键形态：JSON/YAML 的 `"__proto__":`、方括号的 `[__proto__]` / `o[__proto__][x]`
+            r#"(?i)__proto__(?:["'\[\]])"#,
+            // 赋值形态。`=` 后跟 `[ \t]*[^=\s]` 排除 `===` / `==` 比较——
+            // `obj.__proto__ === Array.prototype` 是读取原型，不是污染；
+            // 而 `obj.__proto__ = {}` / `?__proto__=1` 是写入。
+            r"|__proto__\s*=[ \t]*[^=\s]",
+            r"|constructor\[",
+            r"|constructor\.prototype",
+            r"|__defineGetter__",
+            r"|__defineSetter__",
+            r"|__lookupGetter__",
+            r"|__lookupSetter__",
+            r"|hasOwnProperty\[",
+        ]
+        .concat(),
+    )
+    .unwrap()
 });
+
+/// 弱信号：裸 `__proto__`。任何碰原型链的 JS 都会出现它——`const p = obj.__proto__;`
+/// 是语言本身的读法——但它也确实是污染的载体（`obj.__proto__.x = 1` 这条路径
+/// 上面的强形态没覆盖）。报 Low：单条不足以拒绝。
+static WEAK_PATTERNS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)__proto__").unwrap());
 
 pub struct PrototypePollutionDetector;
 
@@ -26,13 +43,23 @@ impl Detector for PrototypePollutionDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*STRONG_PATTERNS),
             self.name(),
             AttackCategory::Data,
             Severity::High,
             "JavaScript prototype pollution detected",
             input,
         )
+        .or_else(|| {
+            regex_detect(
+                std::slice::from_ref(&*WEAK_PATTERNS),
+                self.name(),
+                AttackCategory::Data,
+                Severity::Low,
+                "__proto__ referenced (weak signal)",
+                input,
+            )
+        })
     }
 }
 
@@ -95,6 +122,35 @@ mod tests {
                 "offset out of range for {:?}",
                 payload
             );
+        }
+    }
+
+    /// 裸 `__proto__` 是语言本身的读法，不是污染；只有键/赋值形态才写成 High。
+    /// 攻击方向必须仍然 High：降档不能靠「把检测删掉」达成。
+    #[test]
+    fn bare_proto_reference_is_low_key_shape_is_high() {
+        for payload in [
+            r#"{"__proto__": {"isAdmin": true}}"#,
+            r#"{"__proto__":{"polluted":1}}"#,
+            "o[__proto__][isAdmin]",
+            "obj.__proto__ = {}",
+            "?__proto__[x]=1",
+        ] {
+            let r = PrototypePollutionDetector
+                .detect(payload)
+                .unwrap_or_else(|| panic!("expected detection for {:?}", payload));
+            assert_eq!(r.severity, Severity::High, "payload {:?}", payload);
+        }
+        // 读原型 + 文档里的裸 token：仍检出（弱信号是信号），但只有 Low
+        for input in [
+            "const p = obj.__proto__;",
+            "if (obj.__proto__ === Array.prototype) { init(); }",
+            "| **prototype_pollution** | `__proto__` 原型链污染 | High |",
+        ] {
+            let r = PrototypePollutionDetector
+                .detect(input)
+                .unwrap_or_else(|| panic!("expected weak detection for {:?}", input));
+            assert_eq!(r.severity, Severity::Low, "input {:?}", input);
         }
     }
 

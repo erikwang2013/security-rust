@@ -4,15 +4,21 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    vec![
-        Regex::new(r#"(?i)"alg"\s*:\s*"none""#).unwrap(),
-        Regex::new(r#"(?i)"kid"\s*:.*\.\.\/"#).unwrap(),
-        Regex::new(r#"(?i)"kid"\s*:.*\.\.\\"#).unwrap(),
-        Regex::new(r#"(?i)"kid"\s*:.*/dev/null"#).unwrap(),
-        Regex::new(r"ey[A-Za-z0-9_-]+\.ey[A-Za-z0-9_-]+\.[\s]*").unwrap(),
-        Regex::new(r"ey[A-Za-z0-9_-]+\.[\s]*\.[A-Za-z0-9_-]+").unwrap(),
-    ]
+/// 各分支合成一条 alternation。前四条是 `(?i)`，后两条**故意不是**——
+/// JWT 的 `ey…` 前缀是大小写敏感的 base64url，故 flags 逐条包裹，不能提到最前面。
+static PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        &[
+            r#"(?i:"alg"\s*:\s*"none")"#,
+            r#"|(?i:"kid"\s*:.*\.\.\/)"#,
+            r#"|(?i:"kid"\s*:.*\.\.\\)"#,
+            r#"|(?i:"kid"\s*:.*/dev/null)"#,
+            r"|ey[A-Za-z0-9_-]+\.ey[A-Za-z0-9_-]+\.[\s]*",
+            r"|ey[A-Za-z0-9_-]+\.[\s]*\.[A-Za-z0-9_-]+",
+        ]
+        .concat(),
+    )
+    .unwrap()
 });
 
 pub struct JwtAttackDetector;
@@ -24,7 +30,7 @@ impl Detector for JwtAttackDetector {
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         regex_detect(
-            &PATTERNS,
+            std::slice::from_ref(&*PATTERNS),
             self.name(),
             AttackCategory::Data,
             Severity::High,

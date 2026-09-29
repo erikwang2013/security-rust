@@ -19,6 +19,11 @@ static ACAO_WILDCARD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Access-Control-Allow-Origin:\s*\*").unwrap());
 static CREDS_TRUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Access-Control-Allow-Credentials:\s*true").unwrap());
+
+// 请求侧的 `Origin: null` 是弱信号：沙箱 iframe、`data:` URL、本地文件的源就是
+// `null`，它们发正常跨域请求时带的就是这个头——"出现"本身不构成攻击。要成立得再看
+// 服务端是否用 `ACAO: null` 回显，那一条（ACAO_NULL）才是可判定的形态。所以这里
+// 报 Low：仍然命中，但不单独触发拒绝，也不参与"多条 Medium 叠加成 High"。
 static ORIGIN_NULL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Origin:\s*null\b").unwrap());
 
@@ -32,20 +37,20 @@ impl Detector for CorsDetector {
     fn detect(&self, input: &str) -> Option<DetectionResult> {
         // 顺序有讲究：`Access-Control-Allow-Origin: null` 里含有 `Origin: null` 子串，
         // 先判 ACAO 形态，命中时 matched_pattern 才是完整的那一行。
-        let m = if let Some(m) = ACAO_NULL.find(input) {
-            m
+        let (m, severity) = if let Some(m) = ACAO_NULL.find(input) {
+            (m, Severity::Medium)
         } else if let Some(m) = ACAO_WILDCARD
             .find(input)
             .filter(|_| CREDS_TRUE.is_match(input))
         {
-            m
+            (m, Severity::Medium)
         } else {
-            ORIGIN_NULL.find(input)?
+            (ORIGIN_NULL.find(input)?, Severity::Low)
         };
         Some(DetectionResult {
             attack_type: self.name().to_string(),
             category: AttackCategory::Protocol,
-            severity: Severity::Medium,
+            severity,
             matched_pattern: m.as_str().to_string(),
             offset: m.start(),
             message: "CORS bypass attempt detected".into(),
@@ -58,11 +63,15 @@ mod tests {
     use super::*;
 
     fn assert_detected(input: &str) {
+        assert_hit_at(input, Severity::Medium);
+    }
+
+    fn assert_hit_at(input: &str, severity: Severity) {
         crate::test_helpers::assert_detected(
             &CorsDetector,
             input,
             AttackCategory::Protocol,
-            Severity::Medium,
+            severity,
         );
     }
 
@@ -77,8 +86,24 @@ mod tests {
 
     #[test]
     fn detects_null_origin() {
-        assert_detected("Origin: null");
-        assert_detected("Origin:null");
+        // 弱档：请求侧的 `Origin: null` 仍然命中，但不单独越线
+        assert_hit_at("Origin: null", Severity::Low);
+        assert_hit_at("Origin:null", Severity::Low);
+    }
+
+    /// 沙箱 iframe / `data:` URL / 本地文件的源就是 `null`，它们发正常跨域请求时
+    /// 带的就是这个头。判 Medium 时这类正常请求会参与"多条 Medium 叠加成 High"，
+    /// 所以收在弱档：命中（不静默漏报）但单条 5 分。
+    #[test]
+    fn sandboxed_origin_null_hits_only_the_weak_tier() {
+        assert_hit_at(
+            "Origin: null\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Site: cross-site\r\n\r\n",
+            Severity::Low,
+        );
+        // 服务端回显 `null` 才是可判定的坏配置，仍是 Medium
+        assert_detected(
+            "Access-Control-Allow-Origin: null\r\nAccess-Control-Allow-Credentials: true",
+        );
     }
 
     #[test]
@@ -110,7 +135,7 @@ mod tests {
 
     #[test]
     fn detects_mixed_case() {
-        assert_detected("origin: NULL");
+        assert_hit_at("origin: NULL", Severity::Low);
         assert_detected("access-control-allow-origin: null");
         assert_detected("access-control-allow-origin: *\r\naccess-control-allow-credentials: TRUE");
     }
