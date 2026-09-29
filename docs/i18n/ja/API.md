@@ -37,6 +37,35 @@ pub struct DetectionResult {
 }
 ```
 
+## 二段階信号：強シグナルと弱シグナル
+
+32 個の検出器のうち 18 個がパターンを二段階に分けています（ソース内の `STRONG_PATTERNS` / `WEAK_PATTERNS`）。`DetectionResult` のフィールド構造は変わらず、変わるのは `severity` の値です:
+
+| 段階 | 判定基準 | `severity` | 単条で拒否ラインを越えられるか |
+|------|------|-----------|------------------|
+| **強シグナル** | その形態自体が攻撃由来しかあり得ない | 検出器が宣言した等級 | 越えられる |
+| **弱シグナル** | そのトークンが「出現」しただけ。正常な内容にも溢れている | 常に `Severity::Low`（5 点） | **越えられない** |
+
+同じ検出器・同じ `attack_type` で、違うのは `severity` だけです。`detect()` はまず強档を試し、強档が当たらなければ弱档を試すため、**各検出器は最大 1 件しか返しません**。弱シグナルも依然として検出され、黙って漏れることはありません。
+
+`DetectionResult` 自体は段階を区別しません —— あるヒットが強か弱かは `severity == Severity::Low` で分かります（弱档が `Low` を報告する唯一の源です）。参考パイプラインの拒否ラインは 40 点（`risk.level >= RiskLevel::High`、[`examples/waf.rs:166`](../../../examples/waf.rs)）で、単条の弱シグナルは 5 点しかなくこの分岐に入りません。
+
+弱シグナルの背後にある攻撃を見るには、`assess()` が複数の検出器のヒットを重ねます:
+
+```rust
+let scanner = Scanner::default();
+
+// 3 件の弱シグナルが 3 つの異なる検出器にヒット。重ねてようやく Medium（15 点）に届くが High 未満
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+弱シグナルに降格された形態の例（完全なリストは各検出器の `WEAK_PATTERNS`）: `<script src=...>`、単段の `../`、行頭の `-2`、裸の `__proto__`、`${env:}`、`X-Forwarded-Host`、`Host: localhost`、裸の `10.0.0.5`、`//evil.com`、`information_schema`。
+
+判定基準は**形態**であってファイル名ではありません: 同じ `../` でも、単段の `../x` は `Low`、多段の `../../` は `Critical` を報告します（[`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)）。各検出器がどこまで到達できるかは下の各表と [README](./README.md) の機能表を参照してください。
+
 ## Scanner
 
 ### インストール
@@ -55,15 +84,19 @@ fn main() {
     // ゼロ設定: 全 32 個の検出器を装備
     let scanner = Scanner::default();
 
-    // 入力をスキャンし、検出されたすべての攻撃を返す
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // 入力をスキャンし、検出されたすべての攻撃を返す（各検出器は最大 1 件）
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // 出力:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // 弱シグナルは同じ検出器・同じ attack_type を通り、severity だけが Low になる
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -137,7 +170,7 @@ match verdict.decision {
 }
 ```
 
-- `SessionGuard<S: SessionStore>` — `bind` / `verify` / `revoke` / `revoke_all` / `rotate`
+- `SessionGuard<S: SessionStore>` — `bind` / `verify` / `revoke` / `revoke_all` / `rotate` / `purge_expired`（戻り値は**セッションの件数のみ**で、回収されたログイン履歴は含まない）
 - `SessionVerdict` — `decision: Decision`（`Allow` / `Challenge` / `Block`）、`severity: Option<Severity>`（通過時は `None`）、`threats: Vec<SessionThreat>`
 - `SessionConfig` — `ttl_secs`（既定 3600）、`impossible_travel_kmh`（既定 900.0）、`timestamp_skew_secs`（既定 300）
 - `SessionStore` trait と `MemoryStore`
@@ -195,7 +228,7 @@ throttle.record_success("acct:user-42")?;
 use security_rust::Scanner;
 
 let scanner = Scanner::default();
-let assessment = scanner.assess("<script>alert(1)</script>");
+let assessment = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
 
 println!("{} / {} / {}", assessment.level, assessment.score, assessment.results);
 // CRITICAL | HIGH | MEDIUM | LOW | NONE
@@ -206,6 +239,8 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 - `Scanner::assess(&str) -> RiskAssessment`、および自由関数 `score::assess(&[DetectionResult])`
 
 重みは `Critical`=100、`High`=40、`Medium`=15、`Low`=5 です。`Critical` が 1 件でもあれば合算を待たず `Critical`、それ以外は合計点で `Low`（1〜14）/ `Medium`（15〜39）/ `High`（40〜99）に分かれます。`Low` 3 件が `Medium` に上がるように、低リスク信号の重ね掛けが反映されます。
+
+**これが弱シグナルの唯一の昇格経路です** —— 単条の弱シグナルは 5 点で、40 点の拒否ラインは永遠に越えられません。越えられるのは、複数（異なる検出器から）が重なったときだけです。したがって複数次元の入力を同じ `Scanner` にまとめて渡す方が、単一フィールドだけをスキャンするより弱シグナルの背後にある攻撃が見えます。逆に、短いフィールド 1 つだけをスキャンするなら弱シグナルへの対処は一切不要です。
 
 ## モジュールパス
 
@@ -220,6 +255,26 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 | レート制限 | `src/throttle/` | — |
 | スコアリング | `src/score.rs` | — |
 | ペット | `src/pet.rs` | — |
+
+## 既知の上限
+
+以下は**既知であり、意図的に残している**境界です。未修正の欠陥ではありません。変更する前に根拠を読んでください —— いずれも実測に基づき、かつ誰かが締め上げようとして同じ壁にぶつかったものです。
+
+### `dns_rebinding` は報告するだけで、遮断しない
+
+判定基準は「`Host:` ヘッダーに内部アドレスが現れる」ことですが、同じ形は k8s の pod 間呼び出し（`Host: 10.244.1.5:8080`）、ローカル開発（`Host: localhost:8000`）、Docker のコンテナネットワーク通信（`172.18.0.2`）のすべてでもあります。本当の rebinding が見るのは「公開ドメイン名 + 解決結果が内向き」であり、ブラウザが送る `Host` はまさにその公開ドメイン名です —— **単一の文字列からは解決履歴が見えない**ため、この検出器が測る形態は攻撃の形態と重なりません。締め上げようがありません。したがって検出器全体が弱档で、一律 `Low` を報告し、何条重ねても単独では拒否ラインを越えません。防御は解決**後**に結果 IP を突き合わせる場所にあり、文字列層にはありません。
+
+### このライブラリは自分のソース・テスト・ドキュメントをスキャンできない
+
+シグネチャスキャナの天井: 実測で本リポジトリの 298 ファイル中 78 ファイルが拒否ラインを越えますが、それらは**構造上**すべて攻撃文字列を含んでいます —— テストペイロード、検出器ソース自身の正規表現リテラル、そしてこれらのパターンを列挙する README と OWASP の表です。README は `(a+)+` と書いたからといって欠陥にはなりません。自分の成果物をスキャンするには、まずこのコーパスを除外するか、別の判定基準に替える必要があります。
+
+### `upload` は `<%@` / `<?php` を一律 Critical とする
+
+この検出器の契約は「**この blob はサーバー側で実行可能なコードである**」—— 出現した時点で成立するため、強弱の階層を設けていません。JSP ページと JSP webshell の先頭バイトはバイト単位で同じで（`<%@ page language="java" … %>` と `<%@ page import="java.io.*" %>` は同じ形態）、`<%@`/`<%=` を降格することは webshell を拒否ラインの下へ落とすこと —— それは別のやり方で検出を消すことに他なりません。代償は、**現在配信中の**ページ（アップロードされたファイルではなく）をスキャンしてもヒットすることですが、それは入力域の不一致です。
+
+### `path_traversal` は `(?:\.\./){2,}` を Critical とする
+
+monorepo の深い相対パス（`from '../../../shared/domain'`）がヒットします。これ以上締め上げていないのは、攻撃と区別できる唯一の制約が対象ファイル名のリスト（`../etc/passwd` の類）であり、それがシステムファイルしか覆わないためです —— 攻撃側が LFI の対象を変えればすり抜けます。
 
 ## 性能
 

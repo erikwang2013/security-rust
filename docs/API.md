@@ -37,6 +37,35 @@ pub struct DetectionResult {
 }
 ```
 
+## 两档信号：强信号与弱信号
+
+32 个检测器里有 18 个把模式分成两档（源码里的 `STRONG_PATTERNS` / `WEAK_PATTERNS`）。`DetectionResult` 的字段结构没变，变的是 `severity` 的取值：
+
+| 档位 | 判据 | `severity` | 单条能否越过拒绝线 |
+|------|------|-----------|------------------|
+| **强信号** | 形态本身只可能来自攻击 | 检测器声明的等级 | 能 |
+| **弱信号** | 该 token「出现」而已，正常内容里遍地都是 | 固定 `Severity::Low`（5 分） | **不能** |
+
+同一个检测器、同一个 `attack_type`，只有 `severity` 不同；`detect()` 先试强档，强档不中再试弱档，因此**每个检测器最多返回一条**结果。弱信号仍然被检出，不会静默漏报。
+
+`DetectionResult` 本身不区分档位 —— 想知道一条命中是强是弱，看 `severity == Severity::Low` 即可（弱档是唯一会上报 `Low` 的来源）。参考流水线的拒绝线是 40 分（`risk.level >= RiskLevel::High`，见 [`examples/waf.rs:166`](../examples/waf.rs)），单条弱信号只有 5 分，进不了这一支。
+
+要看穿弱信号背后的攻击，靠的是 `assess()` 把多个检测器的命中叠起来：
+
+```rust
+let scanner = Scanner::default();
+
+// 三条弱信号命中三个不同检测器，叠起来才够到 Medium（15 分），仍低于 High
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+被降为弱信号的形态举例（完整名单见各检测器的 `WEAK_PATTERNS`）：`<script src=...>`、单级 `../`、行首 `-2`、裸 `__proto__`、`${env:}`、`X-Forwarded-Host`、`Host: localhost`、裸 `10.0.0.5`、`//evil.com`、`information_schema`。
+
+判据是**形态**不是文件名：同样是 `../`，单级 `../x` 报 `Low`，多级 `../../` 报 `Critical`（[`src/file/path_traversal.rs`](../src/file/path_traversal.rs)）。各检测器能到多高见下方各表与 [README](../README.md) 的功能表。
+
 ## Scanner
 
 ### 安装
@@ -55,15 +84,19 @@ fn main() {
     // 零配置：装配全部 32 个检测器
     let scanner = Scanner::default();
 
-    // 扫描输入，返回所有检测到的攻击
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // 扫描输入，返回所有检测到的攻击（每个检测器最多一条）
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // 输出:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // 弱信号走同一个检测器、同一个 attack_type，只是 severity 为 Low
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -105,7 +138,7 @@ assert_eq!(clean.level, RiskLevel::None); // score 0, results 0
 // assess 内部就是 scan + score，省得算两遍
 let a = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
 println!("{} score={} results={}", a.level, a.score, a.results);
-// CRITICAL score=255 results=4
+// CRITICAL score=150 results=4
 ```
 
 ### 严重度展示
@@ -157,7 +190,7 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 
 | 类型 | 说明 |
 |------|------|
-| `SessionGuard<S: SessionStore>` | 会话闸门。`bind` / `verify` / `revoke` / `revoke_all` / `rotate` |
+| `SessionGuard<S: SessionStore>` | 会话闸门。`bind` / `verify` / `revoke` / `revoke_all` / `rotate` / `purge_expired` |
 | `RequestContext<'a>` | 一次请求的全部输入：`token`、`subject`、`fingerprint`、`location`、`coords`、`signature`、`at`。`subject` **仅 `bind` 使用** |
 | `SessionVerdict` | 校验结论：`decision`、`severity: Option<Severity>`、`threats` |
 | `Decision` | `Allow` < `Challenge` < `Block`（声明顺序即严格度顺序） |
@@ -180,6 +213,7 @@ impl<S: SessionStore> SessionGuard<S> {
     pub fn revoke(&self, token: &str) -> Result<(), StoreError>;
     pub fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>;
     pub fn rotate(&self, old: &str, new: &str, ctx: &RequestContext, now: u64) -> Result<(), SessionError>;
+    pub fn purge_expired(&self, now: u64) -> Result<usize, StoreError>;
 }
 ```
 
@@ -190,6 +224,7 @@ impl<S: SessionStore> SessionGuard<S> {
 | `revoke` | 吊销单个会话（登出） |
 | `revoke_all` | 吊销某 subject 的全部会话（改密码 / 踢下线），返回受影响条数 |
 | `rotate` | 续期换 token：旧 token 立即失效，新 token 由调用方提供 |
+| `purge_expired` | 清除过期会话与休眠 subject 的登录历史。**返回值只计会话条数**，不含被回收的登录历史 |
 
 ### 最小示例
 
@@ -227,6 +262,7 @@ assert_eq!(verdict.decision, Decision::Block);
 - **指纹与签名用常数时间比较** — 直接 `==` 会在首个不同字节处提前返回，泄露「前 N 个字节猜对了」的时序信息。
 - **缺失即不判定** — 位置、坐标、时间任一缺失时不产生对应威胁，避免误报；坐标在信任边界清洗，非有限值 / 越界一律视为「没有坐标」。
 - **`now` 由调用方传入** — 全部时间参数都是 unix 秒，调用方须保证单调不减。
+- **内存后端的 subject 数量无上限** — `MemoryStore` 每个 subject 的登录历史条数由 `MAX_LOGINS_PER_SUBJECT` = 10 限死，**无上限的是 subject 数量**（`Mutex<HashMap>`，无后台线程，条目只增不减）。长期运行的进程应按 `ttl_secs` 量级的间隔定时调用 `purge_expired`：它删除 `expires_at <= now` 的会话，以及最后一个登录点早于 `now - LOGIN_HISTORY_KEEP_SECS`（7 天）的 subject 的整条登录历史。**返回值只计会话条数**，不含被回收的登录历史。回收休眠 subject 的历史，代价是他的下一次登录少做一次异地 / 不可能旅行判定 —— 那是漏报而非误报，之后历史立即重建。
 
 ## Throttle 限流与封禁
 
@@ -342,6 +378,8 @@ pub fn total(results: &[DetectionResult]) -> u32;
 - 否则按总分分档：`1..=14` → Low、`15..=39` → Medium、`40..=99` → High、`≥100` → Critical
 - 因此 3 × Low（15 分）升级为 Medium，8 × Low（40 分）升级为 High
 
+**这是弱信号唯一的升级路径** —— 单条弱信号 5 分永远越不过 40 分的拒绝线，只有多条（来自不同检测器）叠起来才会。因此把多个维度的输入都喂给同一个 `Scanner`，比只扫单一字段更能看见弱信号背后的攻击；反过来，只扫一个短字段时不必为弱信号做任何处置。
+
 注意 `Severity` 本身**没有** `Ord`（声明顺序是 Critical → Low 递减，派生 `Ord` 会让 `max()` 静默取到最轻的那条），权重表写在评分侧；`RiskLevel` 则相反，声明顺序即强度顺序。
 
 ### 最小示例
@@ -357,14 +395,35 @@ assert_eq!(scanner.assess("hello world 123").level, RiskLevel::None);
 // 多条命中叠加：等级、原始分、命中条数一次拿到
 let a = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
 println!("{} score={} results={}", a.level, a.score, a.results);
-// CRITICAL score=255 results=4
+// CRITICAL score=150 results=4
 
 // 已有 scan 结果时直接聚合（assess 从 crate 根导入，
 // score / total 走模块路径 security_rust::score::{score, total}）
-let results = scanner.scan("<script>alert('xss')</script>");
+// 用强信号载荷：标签「存在」是弱信号（Low，5 分），单独到不了 Critical。
+let results = scanner.scan("<img src=x onerror=alert(1)>");
 let a = security_rust::assess(&results);
 assert_eq!(a.level, RiskLevel::Critical);
 ```
+
+## 已知上限
+
+以下几处是**已知且有意保留**的边界，不是待修的缺陷。改动前请先读依据 —— 每一条都出自实测，且都有人试过收紧后撞上同一堵墙。
+
+### `dns_rebinding` 只上报，不拦截
+
+判据是「`Host:` 头里出现内网地址」，而同一个形状也正是 k8s 里每个 pod 间调用（`Host: 10.244.1.5:8080`）、每次本地开发（`Host: localhost:8000`）、每个 Docker 容器网络请求（`172.18.0.2`）。真正的 rebinding 看的是「公网域名 + 解析结果指向内网」，而浏览器发出的 `Host` 恰恰是那个公网域名 —— **单条字符串里看不到解析历史**，本检测器测的形态与攻击形态并不重合，没有可收紧的方向。因此整个检测器只有弱档，一律 `Low`，无论叠加多少条都不会单独越过拒绝线。防护在解析**之后**比对结果 IP，不在字符串层。
+
+### 这个库扫不动自己的源码、测试和文档
+
+签名扫描器的天花板：实测本仓库 298 个文件里有 78 个越过拒绝线，而它们**按构造**全都含有攻击串 —— 测试载荷、检测器源码里的正则字面量自身，以及列出这些模式的 README 与 OWASP 表格。一份 README 不会因为写了 `(a+)+` 而变成缺陷。要扫自己的产物，得先把这些语料排除，或者换一个判据。
+
+### `upload` 一律把 `<%@` / `<?php` 报为 Critical
+
+该检测器的契约是「**这个 blob 是服务端可执行代码**」—— 出现即成立，因此不设强弱分层。JSP 页面与 JSP webshell 的前导字节逐字节相同（`<%@ page language="java" … %>` 与 `<%@ page import="java.io.*" %>` 是同一形态），把 `<%@`/`<%=` 降档等于让 webshell 落到拒绝线以下 —— 那是换个方式删检测。代价是扫描**正在对外提供的**页面（而不是上传的文件）时也会命中，那属于输入域不符。
+
+### `path_traversal` 把 `(?:\.\./){2,}` 报为 Critical
+
+monorepo 里的深层相对路径（`from '../../../shared/domain'`）会命中。没有进一步收紧，因为唯一能把它与攻击分开的约束是目标文件名列表（`../etc/passwd` 那一类），而那只覆盖系统文件 —— 攻方换一个 LFI 目标就绕过去了。
 
 ## 性能
 

@@ -35,6 +35,35 @@ pub struct DetectionResult {
 }
 ```
 
+## Dos niveles: señales fuertes y débiles
+
+18 de los 32 detectores reparten sus patrones en dos niveles (los estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` del código fuente). La estructura de campos de `DetectionResult` no cambia; lo que cambia es el valor de `severity`:
+
+| Nivel | Criterio | `severity` | ¿Una sola coincidencia cruza la línea de rechazo? |
+|------|------|-----------|------------------|
+| **Fuerte** | La forma en sí solo puede venir de un ataque | El nivel declarado del detector | Sí |
+| **Débil** | El token *aparece* sin más — abunda en el contenido normal | Siempre `Severity::Low` (5 puntos) | **No** |
+
+Mismo detector, mismo `attack_type`, solo cambia `severity`; `detect()` prueba primero el nivel fuerte y recurre al débil, así que **cada detector devuelve como mucho un resultado**. Las señales débiles se siguen detectando y no se pierden en silencio.
+
+`DetectionResult` no distingue los niveles: para saber si una coincidencia es fuerte o débil basta con comprobar `severity == Severity::Low` (el nivel débil es la única fuente que reporta `Low`). El canal de referencia rechaza a los 40 puntos (`risk.level >= RiskLevel::High`, véase [`examples/waf.rs:166`](../../../examples/waf.rs)); una señal débil aislada vale 5 y no llega a esa rama.
+
+Para ver el ataque que hay detrás de las señales débiles está `assess()`, que apila las coincidencias de varios detectores:
+
+```rust
+let scanner = Scanner::default();
+
+// Tres señales débiles de tres detectores distintos — solo el apilamiento llega a Medium (15 puntos), aún por debajo de High
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+Ejemplos de formas degradadas (la lista completa está en los `WEAK_PATTERNS` de cada detector): `<script src=...>`, un `../` de un solo nivel, `-2` al inicio de línea, un `__proto__` desnudo, `${env:}`, `X-Forwarded-Host`, `Host: localhost`, un `10.0.0.5` desnudo, `//evil.com`, `information_schema`.
+
+El criterio es la **forma**, no el nombre del archivo: para un mismo `../`, un solo nivel (`../x`) reporta `Low` y varios niveles (`../../`) reportan `Critical` ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). Hasta dónde llega cada detector está en las tablas de abajo y en las tablas de funcionalidades del [README](./README.md).
+
 ## Scanner
 
 ### Instalación
@@ -53,15 +82,19 @@ fn main() {
     // Cero configuración: ensambla los 32 detectores
     let scanner = Scanner::default();
 
-    // Escanea la entrada y devuelve todos los ataques detectados
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // Escanea la entrada y devuelve todos los ataques detectados (como mucho un resultado por detector)
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // Salida:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // Una señal débil usa el mismo detector y el mismo attack_type, pero reporta Low
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -110,9 +143,15 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 
 ```rust
 use security_rust::{
-    Decision, MemoryStore, MemoryThrottleStore, Scanner,
+    Decision, MemoryStore, MemoryThrottleStore, RequestContext, Scanner,
     SessionConfig, SessionGuard, SessionVerdict,
     Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome,
+};
+
+let now = 1_700_000_000u64;
+let ctx = RequestContext {
+    token: "tok-1", subject: "user-42", fingerprint: "ip=203.0.113.7|ua=curl",
+    location: Some("CN-BJ"), coords: Some((39.9042, 116.4074)), signature: Some("mac-abc"), at: Some(now),
 };
 
 // Protección de sesión — fail-closed: Decision::Block si falla el almacenamiento
@@ -139,7 +178,7 @@ match throttle.record_failure("acct:user-42", now) {
 }
 
 // Evaluación de riesgo: agregar señales sueltas en una magnitud medible
-let risk = Scanner::default().assess(input);
+let risk = Scanner::default().assess("<script>alert('xss')</script>");
 ```
 
 | Elemento | Firma / campo |
@@ -148,6 +187,7 @@ let risk = Scanner::default().assess(input);
 | `SessionGuard::verify` | `fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict` |
 | `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
 | `SessionGuard::rotate` | renueva el token de una sesión |
+| `SessionGuard::purge_expired` | borra las sesiones caducadas y el historial de inicio de sesión de los sujetos inactivos. **El valor de retorno solo cuenta sesiones**, no el historial recuperado |
 | `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
 | `SessionVerdict` | `decision: Decision`, `severity: Option<Severity>` (`None` si se permite), `threats: Vec<SessionThreat>` |
 | `Decision` | `Allow` \| `Challenge` \| `Block` |
@@ -171,6 +211,8 @@ El llamador rellena por completo un `RequestContext`: la biblioteca no incorpora
 
 `subject` **solo lo usa `bind`; `verify` lo ignora por completo** — la identidad que se comprueba en cada petición procede siempre del `SessionRecord` del servidor (el historial de ubicaciones remotas se agrega sobre `record.subject`), y el valor que envía el solicitante no es de fiar. Por eso `subject: ""` desde un middleware es válido (`bind` sí exige un valor no vacío). Y por eso mismo **nunca** debe ponerse aquí un identificador de usuario tomado de una cabecera de la petición: hoy no llega a la decisión, pero una refactorización futura no está obligada a mantenerlo así.
 
+**El número de sujetos no tiene tope en el backend en memoria.** `MemoryStore` limita el historial de inicio de sesión de cada sujeto a `MAX_LOGINS_PER_SUBJECT` = 10, pero **nada limita el número de sujetos** (`Mutex<HashMap>`, sin hilo de fondo, entradas que solo crecen). Un proceso de larga vida debería llamar a `purge_expired` cada cierto intervalo, del orden de `ttl_secs`: borra las sesiones con `expires_at <= now` y todo el historial de inicio de sesión de los sujetos cuyo último punto de inicio de sesión sea anterior a `now - LOGIN_HISTORY_KEEP_SECS` (7 días). **El valor de retorno solo cuenta sesiones**, nunca el historial recuperado. Recuperar el historial de un sujeto inactivo le cuesta a ese sujeto una comprobación menos de ubicación remota / viaje imposible en su siguiente inicio de sesión: eso es un falso negativo y no un falso positivo, y después el historial se reconstruye de inmediato.
+
 ## Rutas de los módulos
 
 | Módulo | Ruta | N.º de detectores |
@@ -181,6 +223,26 @@ El llamador rellena por completo un `RequestContext`: la biblioteca no incorpora
 | Datos | `src/data/` | 7 |
 | Archivos | `src/file/` | 3 |
 | Mascota | `src/pet.rs` | — |
+
+## Límites conocidos
+
+Los siguientes puntos son límites **conocidos y deliberadamente mantenidos**, no defectos pendientes de arreglo. Antes de tocarlos, lee la justificación: cada uno se apoya en mediciones, y cada uno ya ha frenado un intento de endurecerlo.
+
+### `dns_rebinding` solo reporta, no bloquea
+
+Su criterio es «en la cabecera `Host:` aparece una dirección interna» — y esa misma forma es la de toda llamada pod a pod en k8s (`Host: 10.244.1.5:8080`), la de todo desarrollo local (`Host: localhost:8000`) y la de toda petición en la red de contenedores de Docker (`172.18.0.2`). El rebinding real es «un dominio público + un resultado de resolución que apunta hacia dentro», y el `Host` que envía el navegador es precisamente ese nombre público: **una sola cadena no contiene historial de resolución**, así que la forma que prueba este detector no se solapa con la forma del ataque. Por eso el detector es enteramente débil y siempre reporta `Low`; por muchas coincidencias que se apilen, nunca cruza la línea de rechazo por sí solo. La protección va después de la resolución, comparando la IP resultante, no en la capa de cadenas.
+
+### Esta librería no puede escanear su propio código fuente, sus pruebas ni su documentación
+
+El techo del escáner de firmas: medido sobre este repositorio, 78 de 298 archivos cruzan la línea de rechazo, y todos ellos contienen cadenas de ataque **por construcción**: cargas de prueba, los propios literales de expresión regular del código de los detectores y las tablas de README/OWASP que nombran esos patrones. Un README no es defectuoso por listar `(a+)+`. Escanear tus propios artefactos exige excluir antes ese corpus, o elegir otro criterio.
+
+### `upload` reporta `<%@` / `<?php` como Critical allí donde aparezcan
+
+El contrato de este detector es «**este blob es código ejecutable en el servidor**»: la mera presencia lo establece, así que no hay reparto en niveles. Una página JSP y un webshell JSP comparten su preámbulo byte a byte (`<%@ page language="java" … %>` y `<%@ page import="java.io.*" %>` son la misma forma); degradar `<%@`/`<%=` dejaría los webshells por debajo de la línea de rechazo, es decir, borrar con otro nombre. El precio: escanear una página **que se está sirviendo** (y no un archivo subido) también coincide; eso es un dominio de entrada inadecuado.
+
+### `path_traversal` reporta `(?:\.\./){2,}` como Critical
+
+Una ruta relativa profunda en un monorepo (`from '../../../shared/domain'`) coincide. No se endurece más porque la única restricción que la separa de un ataque es una lista de nombres de archivo objetivo (`../etc/passwd` y compañía), y esa solo cubre archivos del sistema: el atacante simplemente elige otro objetivo de LFI.
 
 ## Rendimiento
 

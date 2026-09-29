@@ -35,6 +35,35 @@ pub struct DetectionResult {
 }
 ```
 
+## Deux niveaux : signaux forts et signaux faibles
+
+18 des 32 détecteurs répartissent leurs motifs en deux niveaux (les statiques `STRONG_PATTERNS` / `WEAK_PATTERNS` du code source). La structure de `DetectionResult` ne change pas ; c'est la valeur de `severity` qui change :
+
+| Niveau | Critère | `severity` | Une correspondance isolée franchit-elle le seuil de rejet ? |
+|------|------|-----------|------------------|
+| **Fort** | La forme elle-même ne peut venir que d'une attaque | Le niveau déclaré du détecteur | Oui |
+| **Faible** | Le jeton *apparaît* simplement — il pullule dans le contenu normal | Toujours `Severity::Low` (5 points) | **Non** |
+
+Même détecteur, même `attack_type`, seule `severity` diffère ; `detect()` essaie d'abord le niveau fort et retombe sur le faible, donc **chaque détecteur renvoie au plus un résultat**. Les signaux faibles sont toujours détectés et ne disparaissent pas en silence.
+
+`DetectionResult` ne distingue pas les niveaux — pour savoir si une correspondance est forte ou faible, il suffit de tester `severity == Severity::Low` (le niveau faible est la seule source qui signale `Low`). Le pipeline de référence rejette à 40 points (`risk.level >= RiskLevel::High`, voir [`examples/waf.rs:166`](../../../examples/waf.rs)) ; un signal faible isolé en vaut 5 et n'atteint pas cette branche.
+
+Pour voir l'attaque derrière les signaux faibles, c'est `assess()` qui empile les correspondances de plusieurs détecteurs :
+
+```rust
+let scanner = Scanner::default();
+
+// Trois signaux faibles de trois détecteurs différents — seul l'empilement atteint Medium (15 points), encore sous High
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+Exemples de formes rétrogradées (la liste complète figure dans les `WEAK_PATTERNS` de chaque détecteur) : `<script src=...>`, un `../` à un seul niveau, `-2` en début de ligne, un `__proto__` nu, `${env:}`, `X-Forwarded-Host`, `Host: localhost`, un `10.0.0.5` nu, `//evil.com`, `information_schema`.
+
+Le critère est la **forme**, pas le nom du fichier : pour un même `../`, un seul niveau (`../x`) signale `Low` et plusieurs niveaux (`../../`) signalent `Critical` ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). Le plafond de chaque détecteur figure dans les tableaux ci-dessous et dans les tableaux de fonctionnalités du [README](./README.md).
+
 ## Scanner
 
 ### Installation
@@ -53,15 +82,19 @@ fn main() {
     // Zéro configuration : assemble les 32 détecteurs
     let scanner = Scanner::default();
 
-    // Analyse l'entrée et renvoie toutes les attaques détectées
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // Analyse l'entrée et renvoie toutes les attaques détectées (au plus un résultat par détecteur)
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // Sortie :
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // Un signal faible passe par le même détecteur et le même attack_type, mais signale Low
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -110,9 +143,15 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 
 ```rust
 use security_rust::{
-    Decision, MemoryStore, MemoryThrottleStore, Scanner,
+    Decision, MemoryStore, MemoryThrottleStore, RequestContext, Scanner,
     SessionConfig, SessionGuard, SessionVerdict,
     Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome,
+};
+
+let now = 1_700_000_000u64;
+let ctx = RequestContext {
+    token: "tok-1", subject: "user-42", fingerprint: "ip=203.0.113.7|ua=curl",
+    location: Some("CN-BJ"), coords: Some((39.9042, 116.4074)), signature: Some("mac-abc"), at: Some(now),
 };
 
 // Protection de session — fail-closed : Decision::Block en cas de panne du stockage
@@ -139,7 +178,7 @@ match throttle.record_failure("acct:user-42", now) {
 }
 
 // Évaluation du risque : agréger les signaux isolés en une grandeur mesurable
-let risk = Scanner::default().assess(input);
+let risk = Scanner::default().assess("<script>alert('xss')</script>");
 ```
 
 | Élément | Signature / champ |
@@ -148,6 +187,7 @@ let risk = Scanner::default().assess(input);
 | `SessionGuard::verify` | `fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict` |
 | `SessionGuard::revoke` / `revoke_all` | `fn revoke(&self, token: &str) -> Result<(), StoreError>` / `fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>` |
 | `SessionGuard::rotate` | renouvelle le jeton d'une session |
+| `SessionGuard::purge_expired` | supprime les sessions expirées et l'historique de connexion des sujets dormants. **La valeur de retour ne compte que les sessions**, pas l'historique de connexion récupéré |
 | `RequestContext` | `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at` |
 | `SessionVerdict` | `decision: Decision`, `severity: Option<Severity>` (`None` en cas de passage), `threats: Vec<SessionThreat>` |
 | `Decision` | `Allow` \| `Challenge` \| `Block` |
@@ -171,6 +211,8 @@ Un `RequestContext` est entièrement rempli par l'appelant : la bibliothèque ne
 
 `subject` **n'est utilisé que par `bind` ; `verify` l'ignore totalement** — l'identité vérifiée à chaque requête provient toujours du `SessionRecord` côté serveur (l'historique des lieux distants s'agrège sur `record.subject`), et la valeur fournie par l'appelant n'est pas fiable. `subject: ""` depuis un middleware est donc valide (`bind`, lui, exige une valeur non vide). C'est précisément pourquoi il ne faut **jamais** y placer un identifiant utilisateur issu d'un en-tête de requête : aujourd'hui il n'atteint pas la décision, mais une refactorisation future n'est pas tenue de préserver cela.
 
+**Le nombre de sujets n'est pas borné avec le backend en mémoire.** `MemoryStore` plafonne l'historique de connexion de chaque sujet à `MAX_LOGINS_PER_SUBJECT` = 10, mais **rien ne borne le nombre de sujets** (`Mutex<HashMap>`, aucun thread d'arrière-plan, des entrées qui ne font que croître). Un processus de longue durée devrait appeler `purge_expired` à intervalle régulier, de l'ordre de `ttl_secs` : il supprime les sessions dont `expires_at <= now`, ainsi que tout l'historique de connexion des sujets dont le dernier point de connexion est antérieur à `now - LOGIN_HISTORY_KEEP_SECS` (7 jours). **La valeur de retour ne compte que les sessions**, jamais l'historique récupéré. Récupérer l'historique d'un sujet dormant coûte à celui-ci une vérification de localisation distante / de voyage impossible en moins lors de sa prochaine connexion — c'est un faux négatif, pas un faux positif ; l'historique est reconstruit immédiatement après.
+
 ## Chemins des modules
 
 | Module | Chemin | Nombre de détecteurs |
@@ -181,6 +223,26 @@ Un `RequestContext` est entièrement rempli par l'appelant : la bibliothèque ne
 | Données | `src/data/` | 7 |
 | Fichiers | `src/file/` | 3 |
 | Mascotte | `src/pet.rs` | — |
+
+## Limites connues
+
+Les points suivants sont des limites **connues et volontairement conservées**, et non des défauts en attente de correction. Avant de les modifier, lisez la justification — chacune repose sur des mesures, et chacune a déjà repoussé une tentative de durcissement.
+
+### `dns_rebinding` signale, il ne bloque pas
+
+Son critère est « une adresse interne apparaît dans `Host:` » — et cette même forme est celle de tout appel pod à pod en k8s (`Host: 10.244.1.5:8080`), de tout développement local (`Host: localhost:8000`) et de toute requête sur le réseau de conteneurs Docker (`172.18.0.2`). Un vrai rebinding, c'est « un nom de domaine public + un résultat de résolution qui pointe vers l'intérieur », et le `Host` que le navigateur envoie est précisément ce nom public — **une chaîne isolée ne porte aucun historique de résolution** : la forme que ce détecteur teste ne recouvre pas la forme de l'attaque, et il n'existe aucune direction dans laquelle le durcir. Le détecteur est donc entièrement faible et signale toujours `Low` ; quel que soit le nombre de correspondances empilées, il ne franchit jamais le seuil de rejet à lui seul. La protection se situe après la résolution, dans la comparaison de l'IP obtenue — pas au niveau de la chaîne.
+
+### Cette bibliothèque ne peut pas analyser son propre code source, ses tests ni sa documentation
+
+Le plafond d'un scanner à signatures : mesuré sur ce dépôt, 78 fichiers sur 298 franchissent le seuil de rejet, et ils contiennent tous des chaînes d'attaque **par construction** — charges de test, littéraux d'expression régulière du code des détecteurs eux-mêmes, et tableaux README/OWASP qui nomment ces motifs. Un README n'est pas défectueux parce qu'il liste `(a+)+`. Analyser ses propres artefacts suppose d'exclure d'abord ce corpus — ou de choisir un autre critère.
+
+### `upload` signale `<%@` / `<?php` comme Critical où qu'ils apparaissent
+
+Le contrat de ce détecteur est « **ce blob est du code exécutable côté serveur** » — la présence suffit, il n'y a donc pas de répartition en niveaux. Une page JSP et un webshell JSP partagent leur préambule octet pour octet (`<%@ page language="java" … %>` et `<%@ page import="java.io.*" %>` ont la même forme) ; rétrograder `<%@`/`<%=` ferait passer les webshells sous le seuil de rejet — une suppression sous un autre nom. Le prix à payer : analyser une page **en cours de service** (et non un fichier téléversé) déclenche aussi une détection ; c'est un domaine d'entrée inadéquat.
+
+### `path_traversal` signale `(?:\.\./){2,}` comme Critical
+
+Un chemin relatif profond dans un monorepo (`from '../../../shared/domain'`) est détecté. Le durcissement s'arrête là, car la seule contrainte qui le sépare d'une attaque est une liste de noms de fichiers cibles (`../etc/passwd` et compagnie) — et elle ne couvre que les fichiers système : l'attaquant choisit simplement une autre cible de LFI.
 
 ## Performances
 

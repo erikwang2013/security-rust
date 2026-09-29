@@ -37,6 +37,35 @@ pub struct DetectionResult {
 }
 ```
 
+## Dua Tingkat: Sinyal Kuat dan Sinyal Lemah
+
+18 dari 32 detektor membagi polanya menjadi dua tingkat (static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber). Struktur bidang `DetectionResult` tidak berubah; yang berubah adalah nilai `severity`:
+
+| Tingkat | Kriteria | `severity` | Satu temuan bisa melewati garis tolak? |
+|------|------|-----------|------------------|
+| **Kuat** | Bentuknya sendiri hanya mungkin berasal dari serangan | Tingkat yang dideklarasikan detektor | Bisa |
+| **Lemah** | Token itu hanya *muncul* — ada di mana-mana dalam konten normal | Selalu `Severity::Low` (5 poin) | **Tidak** |
+
+Detektor yang sama, `attack_type` yang sama, hanya `severity` yang berbeda. `detect()` mencoba tingkat kuat lebih dulu dan beralih ke tingkat lemah bila tidak ada yang cocok, sehingga **setiap detektor mengembalikan paling banyak satu hasil**. Sinyal lemah tetap terdeteksi dan tidak dibuang diam-diam.
+
+`DetectionResult` sendiri tidak membedakan tingkat —— untuk mengetahui sebuah temuan kuat atau lemah, lihat `severity == Severity::Low` (tingkat lemah adalah satu-satunya sumber yang melaporkan `Low`). Garis tolak pipeline rujukan adalah 40 poin (`risk.level >= RiskLevel::High`, [`examples/waf.rs:166`](../../../examples/waf.rs)); satu sinyal lemah hanya 5 poin sehingga tidak masuk ke cabang itu.
+
+Untuk melihat serangan di balik sinyal lemah, `assess()` menumpuk temuan dari beberapa detektor:
+
+```rust
+let scanner = Scanner::default();
+
+// Tiga sinyal lemah di tiga detektor berbeda. Hanya tumpukannya yang mencapai Medium (15 poin), masih di bawah High
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+Contoh bentuk yang diturunkan menjadi sinyal lemah (daftar lengkapnya ada di `WEAK_PATTERNS` tiap detektor): `<script src=...>`, `../` satu tingkat, `-2` di awal baris, `__proto__` telanjang, `${env:}`, `X-Forwarded-Host`, `Host: localhost`, `10.0.0.5` telanjang, `//evil.com`, `information_schema`.
+
+Kriterianya adalah **bentuk**, bukan nama berkas: untuk `../` yang sama, satu tingkat (`../x`) melaporkan `Low` dan banyak tingkat (`../../`) melaporkan `Critical` ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). Sejauh mana tiap detektor dapat mencapai tingkat tertentu ada di tabel-tabel berikut dan tabel fitur di [README](./README.md).
+
 ## Scanner
 
 ### Instalasi
@@ -55,15 +84,19 @@ fn main() {
     // tanpa konfigurasi: rakit seluruh 32 detektor
     let scanner = Scanner::default();
 
-    // pindai input, kembalikan semua serangan yang terdeteksi
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // pindai input, kembalikan semua serangan yang terdeteksi (tiap detektor paling banyak satu)
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // Output:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // Sinyal lemah melewati detektor dan attack_type yang sama, hanya severity-nya Low
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -113,17 +146,21 @@ Ketiga modul ini tersedia langsung dari akar crate. `session` dan `throttle` sen
 ### `session` — keamanan sesi
 
 ```rust
-use security_rust::session::{MemoryStore, RequestContext, SessionConfig, SessionGuard};
+use security_rust::session::{MemoryStore, RequestContext, SessionConfig, SessionGuard, SessionStore};
 
 let guard = SessionGuard::new(MemoryStore::new(), SessionConfig::default());
 
-let v = guard.bind(&ctx, now)?;        // Result<SessionVerdict, SessionError>
-let v = guard.verify(&ctx, now);       // SessionVerdict
-guard.revoke(token)?;                  // Result<(), StoreError>
-let n = guard.revoke_all(subject)?;    // Result<usize, StoreError>
-guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
+impl<S: SessionStore> SessionGuard<S> {
+    pub fn bind(&self, ctx: &RequestContext, now: u64) -> Result<SessionVerdict, SessionError>;
+    pub fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict;
+    pub fn revoke(&self, token: &str) -> Result<(), StoreError>;
+    pub fn revoke_all(&self, subject: &str) -> Result<usize, StoreError>;
+    pub fn rotate(&self, old: &str, new: &str, ctx: &RequestContext, now: u64) -> Result<(), SessionError>;
+    pub fn purge_expired(&self, now: u64) -> Result<usize, StoreError>;
+}
 ```
 
+- `purge_expired` menghapus sesi yang sudah kedaluwarsa beserta riwayat login subjek yang dorman. **Nilai kembaliannya hanya menghitung sesi**, tidak termasuk riwayat login yang didaur ulang
 - Bidang `RequestContext`: `token`, `subject`, `fingerprint`, `location`, `coords`, `signature`, `at`
 - Bidang `SessionVerdict`: `decision`, `severity: Option<Severity>` (`None` saat diizinkan), `threats`
 - `subject` **hanya dipakai `bind`; `verify` mengabaikannya sepenuhnya**: identitas tiap permintaan selalu diambil dari `SessionRecord` di server (riwayat lokasi asing diagregasi pada `record.subject`), dan `subject` yang dikirim pemanggil tidak tepercaya; karena itu `subject: ""` dari middleware sah (`bind` yang menuntut nilai tidak kosong). Justru karena itu **jangan pernah** menaruh identitas pengguna dari header permintaan di sini — hari ini ia tidak sampai ke keputusan, tetapi refactor di masa depan tidak wajib mempertahankannya.
@@ -138,6 +175,9 @@ guard.rotate(old, new, &ctx, now)?;    // Result<(), SessionError>
 use security_rust::throttle::{MemoryThrottleStore, Throttle, ThrottleConfig, ThrottleDecision, ThrottleOutcome};
 
 let throttle = Throttle::new(MemoryThrottleStore::new(), ThrottleConfig::default());
+
+let key = "acct:user-42";
+let now = 1_700_000_000u64;
 
 match throttle.check(key, now) {
     ThrottleDecision::Allow { remaining } => { /* diizinkan */ }
@@ -161,13 +201,13 @@ throttle.purge_expired(now)?;        // Result<usize, StoreError>
 ### `score` — penilaian risiko
 
 ```rust
-use security_rust::assess;
+use security_rust::{assess, Scanner};
 
-let results = Scanner::default().scan(input);
+let results = Scanner::default().scan("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
 let a = assess(&results);
-println!("{} {}", a.level, a.score);   // misalnya: HIGH 40
+println!("{} {}", a.level, a.score);   // misalnya: CRITICAL 150
 
-let a = Scanner::default().assess(input);  // langsung RiskAssessment
+let a = Scanner::default().assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");  // langsung RiskAssessment
 ```
 
 - `RiskLevel`: `None` | `Low` | `Medium` | `High` | `Critical`
@@ -187,6 +227,26 @@ let a = Scanner::default().assess(input);  // langsung RiskAssessment
 | Pembatasan laju | `src/throttle/` | — |
 | Penilaian risiko | `src/score.rs` | — |
 | Maskot | `src/pet.rs` | — |
+
+## Batas yang Diketahui
+
+Berikut adalah batas yang **diketahui dan sengaja dipertahankan**, bukan cacat yang menunggu perbaikan. Setiap butir punya bukti pengukuran, dan setiap butir sudah pernah menggagalkan upaya memperketatnya.
+
+### `dns_rebinding` melaporkan, tidak memblokir
+
+Kriterianya adalah «alamat internal muncul di `Host:`» — dan bentuk yang sama juga merupakan setiap panggilan antar-pod k8s (`Host: 10.244.1.5:8080`), setiap pengembangan lokal (`Host: localhost:8000`), dan setiap permintaan jaringan kontainer Docker (`172.18.0.2`). Rebinding yang sebenarnya melihat «nama domain publik + hasil resolusi yang mengarah ke dalam», sedangkan `Host` yang dikirim peramban justru nama publik itu — **satu string tidak membawa riwayat resolusi**, sehingga bentuk yang diuji detektor ini tidak beririsan dengan bentuk serangan, dan tidak ada arah pengetatan. Karena itu seluruh detektor hanya berisi tingkat lemah dan selalu melaporkan `Low`; sebanyak apa pun tumpukannya tidak akan melewati garis tolak sendirian. Perlindungan berada **setelah** resolusi, membandingkan IP hasilnya, bukan di lapisan string.
+
+### Pustaka ini tidak bisa memindai sumber, tes, dan dokumentasinya sendiri
+
+Langit-langit pemindai tanda tangan: terukur pada repositori ini, 78 dari 298 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
+
+### `upload` selalu melaporkan `<%@` / `<?php` sebagai Critical
+
+Kontrak detektor ini adalah «**blob ini adalah kode yang dapat dieksekusi di sisi server**» — kemunculannya sudah cukup, jadi tidak ada pemisahan tingkat. Halaman JSP dan webshell JSP berbagi byte pembuka yang identik (`<%@ page language="java" … %>` dan `<%@ page import="java.io.*" %>` adalah bentuk yang sama); menurunkan `<%@`/`<%=` berarti menjatuhkan webshell ke bawah garis tolak — itu menghapus deteksi dengan cara lain. Harganya, memindai halaman yang **sedang disajikan** (bukan berkas yang diunggah) juga terkena; itu ketidaksesuaian ranah input.
+
+### `path_traversal` melaporkan `(?:\.\./){2,}` sebagai Critical
+
+Path relatif yang dalam di monorepo (`from '../../../shared/domain'`) akan terkena. Tidak diperketat lebih lanjut karena satu-satunya batasan yang memisahkannya dari serangan adalah daftar nama berkas target (`../etc/passwd` dan sejenisnya), yang hanya mencakup berkas sistem — penyerang tinggal mengganti target LFI.
 
 ## Performa
 

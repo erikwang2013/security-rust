@@ -14,6 +14,8 @@
 | 🟡 | 部分覆盖：只解决了这一类风险的一半，另一半必须由别的手段补齐 |
 | ❌ | 不在范围内：本库对该类风险不产生任何信号 |
 
+**先读这条：两档信号。** 32 个检测器里有 18 个把模式分成强 / 弱两档（见 [README 的「两档判定」](../README.md#两档判定强信号与弱信号)）。本文各表中标 `（弱）` 的特征上报 `Severity::Low`（5 分），**不能单独越过调用方的拒绝线**（参考流水线取 `risk.level >= RiskLevel::High`，即 40 分）；只有 `assess()` 聚合多条命中才可能升级。因此下表里「有对应检测器」不等于「该载荷会被拒」—— 弱档命中是**信号**，处置权在调用方。
+
 ---
 
 ## 1. 主矩阵
@@ -46,7 +48,7 @@
 
 本库不含任何加密、解密、哈希、随机数或密钥管理代码，也不检查 TLS 配置、证书、算法强度、口令哈希是否加盐。
 
-唯一相邻的是 `data_leak`：当输入里出现明文私钥（RSA/DSA/EC/PGP）、`AKIA` 云凭证、`sk-` API key、`mongodb://` / `mysql://` / `postgres://` / `redis://` / `jdbc:` 连接串，或通过 Luhn 校验的银行卡号时，给出 `Severity::Critical`。注意它是**「敏感数据出现在了输入里」**，与「密码学实现失败」不是同一件事：能测出泄露，不等于测不出弱算法。
+唯一相邻的是 `data_leak`：当输入里出现明文私钥（RSA/DSA/EC/PGP）、`AKIA` 云凭证、`sk-` API key、`mongodb://` / `mysql://` / `postgres://` / `redis://` 连接串（**须含 `@` userinfo** —— 秘密是 URL 里的凭据，不是 scheme 本身，故 `redis://shared-memory` 不报）/ `jdbc:` 连接串（无此约束），或通过 Luhn 校验的银行卡号时，给出 `Severity::Critical`。注意它是**「敏感数据出现在了输入里」**，与「密码学实现失败」不是同一件事：能测出泄露，不等于测不出弱算法。
 
 该用：OWASP Cryptographic Storage / Secrets Management / Key Management Cheat Sheet，配合 TLS 终止层配置检查与 `argon2` / `rustls` 这类专门实现。
 
@@ -56,21 +58,21 @@
 
 | 检测器 | 主要特征 |
 |--------|----------|
-| `xss` | `<script` / `<svg` / `<iframe` / `<embed` / `<object` / `<link` / `<meta`、`on*=` 事件处理器全表、`javascript:` / `vbscript:` / `data:text/html`、`eval(` / `fromCharCode(` / `document.cookie` / `document.write(` |
-| `sql_injection` | `UNION [ALL] SELECT`、`SELECT ... FROM`、时间盲注（`sleep(` / `benchmark(` / `pg_sleep(` / `WAITFOR DELAY`）、`information_schema`、`LOAD_FILE(` / `INTO OUTFILE` / `DROP TABLE`、注释符截断（`--`/`#`/`/*`）与 `' OR '1'='1` |
-| `command_injection` | 反引号、`$(...)`、`\| cmd`、`\|\| cmd`、`&& cmd`、`/dev/tcp`、`system(` / `exec(` / `shell_exec(` / `passthru(` / `popen(` / `pcntl_exec(`、`cmd.exe` / `powershell` |
+| `xss` | `on*=` 事件处理器全表、`javascript:` / `vbscript:`（只认 scheme 后紧跟非空白）；（弱）`<script` / `<iframe` / `<embed` / `<object` / `<link` 标签、`expression(` |
+| `sql_injection` | `UNION [ALL] SELECT`、`SELECT ... FROM`、时间盲注（`sleep(` / `benchmark(` / `pg_sleep(` / `WAITFOR DELAY`，均限语句位置）、`LOAD_FILE(` / `INTO OUTFILE` / `DROP TABLE` / `INSERT INTO`、注释符拆词（`UN/**/ION`）与 `' OR '1'='1`；（弱）`information_schema` |
+| `command_injection` | `/dev/tcp`、`system("` / `shell_exec(` / `passthru(` / `popen(` / `pcntl_exec(` 调用形态、`cmd.exe /c` / `powershell -Command` 调用形态；（弱）反引号、`$(...)`、`\| cmd`、`\|\| cmd`、`&& cmd`、`exec(`、`>/dev/null`、`cat /etc/passwd`、裸 `cmd.exe` / `powershell` |
 | `nosql_injection` | `{"$ne":` / `$gt` / `$regex` / `$where` / `$or` / `$nin` 等 MongoDB 操作符 |
 | `ldap_injection` | `(&` / `(\|` / `(!(`、`*(cn=`、`(objectClass=`、`(uid=` |
 | `xpath_injection` | `' or '1'='1`、`' and '1'='2`、`' or true(`、`' ] \| ` |
-| `jndi_injection` | `${jndi:` 及 `${lower:j}` / `${upper:j}` / `${::-j}` 等绕过写法、`${env:` / `${sys:` / `${java:` |
+| `jndi_injection` | `${jndi:` 及 `${lower:j}` / `${upper:j}` / `${::-j}` 等只为混淆而存在的写法；（弱）`${env:` / `${sys:` / `${java:` —— 它们是 log4j2 的合法 lookup 语法，配置文件里满处都是 |
 | `log4shell` | Log4j lookup 混淆：`${lower:x}`、`${::-x}` 嵌套、URL 编码 `%24%7b`，覆盖 `jndi/lower/upper/env/sys/date/java/base64/...` |
-| `ssi_injection` | `<!--#exec cmd=` / `<!--#include file=` / `<!--#echo var=` / `#fsize` / `#flastmod` / `#config` / `#printenv` |
-| `graphql_injection` | `__schema` / `__type {` / `__typename` 内省，以及五层以上嵌套查询 |
-| `ssti` | 模板定界符内的**求值**写法（`{{7*7}}`、`${7*7}`）、`{{config`、`${T(java.lang.Runtime)}`、`{% %}`、`<%=` / `<%@`、`#set(`、Python 逃逸链 `__mro__` / `__subclasses__` / `__globals__` / `__builtins__` / `__class__` / `__dict__`；定界符本身不是信号，`${x}` 这类纯占位符不报 |
+| `ssi_injection` | `<!--#exec cmd=`、`<!--#include file=` 带绝对路径或 `..`、`<!--#printenv`；（弱）`<!--#echo var=` / `#fsize` / `#flastmod` / `#config`、常规 `<!--#include file="header.html"` |
+| `graphql_injection` | `__schema {` / `__type {`（带选择集的内省查询，散文提到字段名不报）；（弱）`__typename`、五层以上嵌套花括号 |
+| `ssti` | 模板定界符内的**求值**写法（`{{7*7}}`、`${7*7}`）、`{{config`、`${T(java.lang.Runtime)}`、`{% include '/…'` / `..`、定界符内的 Python 逃逸链 `__mro__` / `__subclasses__` / `__globals__` / `__builtins__` / `__class__` / `__dict__`、FreeMarker `?new(`；（弱）`{% %}`、`<%=` / `<%@`、`#set(` 等裸模板指令、裸魔术属性；定界符本身不是信号，`${x}` 这类纯占位符不报 |
 | `format_string` | `%n` 写内存（含位数与长度修饰符组合）、`%999999d`、连续 `%x` / `%s` 泄露栈 |
-| `header_injection` | CRLF 后接 `Set-Cookie` / `Location` / `Content-Length` / `Transfer-Encoding` / `Refresh` / `Status` / `WWW-Authenticate`，或 `%0d` 与 `%0a` 同时出现 |
-| `mail_header` | `Bcc:` / `Cc:` / `MIME-Version:` / `boundary=`、`Content-Type: ...multipart`、重复 `From:` |
-| `csv_injection` | 单元格起始的 `= + - @`（制表符与回车是分隔符，不算起始符）、分隔符 `,` / `;` / `\t` 之后紧跟非空白的 `=`、`DDE`、`cmd\|`、`@SUM(` |
+| `header_injection` | 响应专有头前置 `\r\n`：`Set-Cookie` / `Location` / `Refresh` / `Status` / `WWW-Authenticate`，或 `%0d` 与 `%0a` 同时出现（含反序 `%0a…%0d`）。`Content-Length` / `Content-Type` / `Transfer-Encoding` 是**请求**头，与正常报文的每个头逐字节同形，已移出信号集 |
+| `mail_header` | 相邻两个 `From:` 头、行首 `MIME-Version:`；（弱）行首 `Bcc:` / `Cc:`。`Content-Type: ...multipart` 与 `boundary=` **已删除**（`multipart/form-data` 是每个文件上传 POST 的标准头）。上限即 Medium，不能单独越过拒绝线 |
+| `csv_injection` | 分隔符 `,` / `;` / `\t` 之后紧跟非空白的 `=`、行首 `DDE` / `cmd\|` / `@SUM(`；（弱）行首 `= + -` 且其后既非空白也非同族符号（`- item`、`---`、`++i`、`= 5` 均不命中）。`@` 已整体移出粗粒度层，只保留 `@SUM(`。制表符与回车是分隔符，不算起始符 |
 | `formula_injection` | 行首或分隔符后的公式起始符 + `cmd\|` / `HYPERLINK` / `IMPORTXML` / `IMPORTDATA` / `IMPORTRANGE` / `IMPORTFEED` / `WEBSERVICE` / `FILTERXML` / `RTD` / `EXEC`、`DDE(`、DDE 外部引用（`'file'!A1`） |
 
 **缺口**（这一节比上面那张表重要）：
@@ -91,8 +93,8 @@
 #### A05 Security Misconfiguration —— 🟡 看见的是载荷，不是配置
 
 - `cors`：`Access-Control-Allow-Origin: null`、`Origin: null`，以及 `Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**。单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 在公开 API 与静态资源里是常态，不报。
-- `header_injection`：响应头注入（CRLF 拆出 `Location` / `Set-Cookie` 等）。
-- `host_header`：CRLF 后伪造 `Host`、`X-Forwarded-*`、`X-Original-URL`、`X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部。
+- `header_injection`：响应头注入 —— `\r\n` 后接响应专有头（`Set-Cookie` / `Location` / `Refresh` / `Status` / `WWW-Authenticate`），或 `%0d` 与 `%0a` 同现。
+- `host_header`：**两个** `Host:` 头（RFC 7230 §5.4 要求一律回 400，两层解析器取值不一致）；（弱）`X-Forwarded-Host` / `X-Original-URL` / `X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部，但代理自己也会加这几个头，字节上与客户端伪造相同，故只报 Low。`X-Forwarded-For` / `X-Forwarded-Proto` **不报**（几乎每个走代理的请求都有，判伪造要看值，不看头名）。
 - `request_smuggling`：重复 `Transfer-Encoding`、`Transfer-Encoding: chunked`。
 - `websocket`：`Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）；`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`）。
 - `xxe`：`<!DOCTYPE`、`<!ENTITY`、`SYSTEM "..."`、`PUBLIC "..."`（XML 解析器被允许展开外部实体，本质是解析器配置问题）。
@@ -143,8 +145,8 @@
 
 #### A10 Server-Side Request Forgery —— ✅ 有专门检测器，但别当成出站策略
 
-- `ssrf`：云元数据地址 `169.254.169.254`、RFC1918 三段（`10.` / `172.16-31.` / `192.168.`）、`127.0.0.0/8`、`[::1]`、`0.0.0.0`，以及危险协议 `gopher://` / `dict://` / `file:///` / `ftp://user@host`。
-- `dns_rebinding`：`Host:` 头指向内网段、`localhost`、`[::1]`、`0.0.0.0` —— DNS rebinding 的利用前提是服务端按字面主机名做了「看起来安全」的判断。
+- `ssrf`：云元数据地址 `169.254.169.254` 与 `metadata.google.internal`、**URL authority 位置**（`//` 之后）的 RFC1918 三段（`10.` / `172.16-31.` / `192.168.`）、`//127.0.0.0/8`、`//[::1]`、`//0.0.0.0`、`//localhost`，以及危险协议 `gopher://` / `dict://` / `file:///` / `ftp://user@host`。**非 URL 位置**的同一批内网字面量只报 `Low`：`X-Forwarded-For: 10.0.0.5`（内网 LB 加的）、`bind 127.0.0.1`（redis.conf 默认值）、`{"host": "10.0.0.1"}`（主机与端口分开传的 SSRF 载荷）三者逐字节同形，单条字符串分不开（[`src/protocol/ssrf.rs`](../src/protocol/ssrf.rs) 的 `WEAK_PATTERNS`）。
+- `dns_rebinding`：`Host:` 头指向内网段、`localhost`、`[::1]`、`0.0.0.0`。**本检测器整体是弱信号，一律 `Low`，不能单独越过拒绝线** —— DNS rebinding 的利用前提是服务端按字面主机名做了「看起来安全」的判断，但同一个形状也是 k8s 里每个 pod 间调用（`Host: 10.244.1.5:8080`）、每次本地开发（`Host: localhost:8000`）、每个容器网络请求（`172.18.0.2`）。真正要看的是「公网域名 + 解析结果指向内网」，而浏览器发出的 `Host` 恰恰是那个公网域名，单条字符串里没有解析历史。
 
 **缺口**：只匹配字面量。进制变形（`2130706433`、`0177.0.0.1`、`0x7f.1`）、IPv6 映射（`::ffff:127.0.0.1`）、URL 用户名混淆（`http://expected.com@internal/`）、302 跳转、以及「解析后指向内网的自有域名」都不保证命中。真正的 rebinding 防护是解析**之后**再比对结果 IP，本库在字符串层面做不了这件事（检查时的解析与请求时的解析可以不同，这本身就是 TOCTOU）。
 
@@ -168,9 +170,9 @@
 
 另需注意几处**设计上的误报面**（属取舍而非缺陷，调用方需自行判读）：
 
-- `csv_injection` 认单元格起始的 `=` / `+` / `-` / `@`，正常文本里以 `= ` 或 `-` 开头的行（如 `= 5`、`-3 just`）仍会命中；制表符与回车已按分隔符处理，不再是起始符。属粗粒度层，靠 `Scanner::assess` 的累积评分而非单条命中下判断。
-- `cors` 的单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 已不再命中；残留的是 `Origin: null` —— 它在合法场景（沙箱 iframe、`file://` 页面、部分代理）里也会出现。
-- `ssti` 单写 `${x}` / `{{ name }}` 这类占位符已不再命中；残留的是 `{% %}`、`<%=`、`#set(` 这类模板语法形态 —— 扫描模板源码、代码片段或 diff 时会命中，需由调用方按上下文判读。
+- `csv_injection` 的残留误报面只剩下**行首 `=` / `+` / `-` 且其后既非空白也非同族符号**这一条，且上报 `Low`（5 分）：`-3 just`、`-2 degrees` 这类散文里的负数仍然命中（与单元格里的 `-2+3` 字节同形，正则分不开）。`- item` 列表项、`---` 分隔线、`++i`、`= 5` 均**不命中**（前缀后是空白或同族符号）。`@` 已整体移出粗粒度层，只保留 `@SUM(`。属弱档，靠 `Scanner::assess` 的累积评分而非单条命中下判断。
+- `cors` 的单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 已不再命中；残留的是 `Origin: null`，上报 `Low` —— 它在合法场景（沙箱 iframe、`file://` 页面、部分代理）里也会出现，要服务端用 `ACAO: null` 回显才成立（那一条是 Medium）。
+- `ssti` 单写 `${x}` / `{{ name }}` 这类占位符已不再命中；残留的 `{% %}`、`<%=`、`#set(` 这类裸模板语法形态上报 `Low` —— 扫描模板源码、代码片段或 diff 时会命中，需由调用方按上下文判读。
 
 ---
 
@@ -208,42 +210,44 @@
 
 ## 4. 附录：32 个检测器全清单
 
-按 `Detector::name()` 字母序（与 `Scanner::default()` 的装配顺序无关）。`Severity` 为该检测器固定返回的等级，`AttackCategory` 为 `DetectionResult.category`。
+按 `Detector::name()` 字母序（与 `Scanner::default()` 的装配顺序无关）。`Severity` 为该检测器能达到的**上限** —— 标 `（弱档）` 的检测器存在弱档，弱档命中一律上报 `Severity::Low`（5 分）；`dns_rebinding` 全档皆弱，上限即 `Low`。`AttackCategory` 为 `DetectionResult.category`。
 
 | `name()` | 分类 | Severity | 本文出现位置 |
 |----------|------|----------|--------------|
-| `command_injection` | Injection | Critical | A03、补充表 |
-| `cors` | Protocol | Medium | A05、补充表 |
-| `csv_injection` | Data | Medium | A03、A08、补充表 |
+| `command_injection` | Injection | Critical（弱档） | A03、补充表 |
+| `cors` | Protocol | Medium（弱档） | A05、补充表 |
+| `csv_injection` | Data | Medium（弱档） | A03、A08、补充表 |
 | `data_leak` | File | Critical | A02、补充表 |
-| `deserialization` | Data | Critical | A08 |
-| `dns_rebinding` | Protocol | High | A10、补充表 |
+| `deserialization` | Data | Critical（弱档） | A08 |
+| `dns_rebinding` | Protocol | Low（全弱） | A10、补充表 |
 | `format_string` | Injection | Medium | A03、补充表 |
 | `formula_injection` | Data | High | A03、A08、补充表 |
-| `graphql_injection` | Injection | Medium | A03、补充表 |
+| `graphql_injection` | Injection | Medium（弱档） | A03、补充表 |
 | `header_injection` | Protocol | High | A03、A05、补充表 |
-| `host_header` | Protocol | High | A05、补充表 |
-| `hpp` | Protocol | Medium | A01、补充表 |
-| `jndi_injection` | Injection | Critical | A03 |
+| `host_header` | Protocol | High（弱档） | A05、补充表 |
+| `hpp` | Protocol | Medium（弱档） | A01、补充表 |
+| `jndi_injection` | Injection | Critical（弱档） | A03 |
 | `jwt_attack` | Data | High | A07、A08、补充表 |
 | `ldap_injection` | Injection | High | A03、补充表 |
 | `log4shell` | Protocol | Critical | A03、补充表 |
-| `mail_header` | Data | Medium | A03、补充表 |
+| `mail_header` | Data | Medium（弱档） | A03、补充表 |
 | `nosql_injection` | Injection | Critical | A03 |
-| `open_redirect` | Protocol | Medium | A01、补充表 |
-| `path_traversal` | File | Critical | A01 |
-| `prototype_pollution` | Data | High | A08、补充表 |
+| `open_redirect` | Protocol | Medium（弱档） | A01、补充表 |
+| `path_traversal` | File | Critical（弱档） | A01 |
+| `prototype_pollution` | Data | High（弱档） | A08、补充表 |
 | `redos` | Data | Medium | A04、补充表 |
 | `request_smuggling` | Protocol | High | A05、补充表 |
-| `sql_injection` | Injection | Critical | A03 |
-| `ssi_injection` | Injection | High | A03、补充表 |
-| `ssrf` | Protocol | Critical | A10、补充表 |
-| `ssti` | Injection | Critical | A03、补充表 |
+| `sql_injection` | Injection | Critical（弱档） | A03 |
+| `ssi_injection` | Injection | High（弱档） | A03、补充表 |
+| `ssrf` | Protocol | Critical（弱档） | A10、补充表 |
+| `ssti` | Injection | Critical（弱档） | A03、补充表 |
 | `upload` | File | Critical | A05、补充表 |
 | `websocket` | Protocol | High | A05、补充表 |
 | `xpath_injection` | Injection | High | A03、补充表 |
-| `xss` | Injection | Critical | A03 |
+| `xss` | Injection | Critical（弱档） | A03 |
 | `xxe` | Protocol | Critical | A05 |
+
+弱档检测器共 18 个：`command_injection`、`cors`、`csv_injection`、`deserialization`、`dns_rebinding`（全弱）、`graphql_injection`、`host_header`、`hpp`、`jndi_injection`、`mail_header`、`open_redirect`、`path_traversal`、`prototype_pollution`、`sql_injection`、`ssi_injection`、`ssrf`、`ssti`、`xss`。
 
 分类计数：Injection 11、Protocol 11、Data 7、File 3，合计 32。
 

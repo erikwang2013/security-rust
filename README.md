@@ -95,6 +95,45 @@ security-rust/
 | 检测器 vs 有状态模块 | 分开 | `Detector::detect(&str)` 只有字符串入参，表达不了「token + 指纹 + 位置 + 时间」的复合输入，`session` / `throttle` 因此独立于 `Scanner` |
 | fail-closed vs fail-open | 认证 fail-closed，限流 fail-open | 会话判定放行等于被绕过，必须阻断；限流挡全体用户是自我 DoS，且主认证闸门仍在拦，处置权交调用方 |
 
+### 两档判定：强信号与弱信号
+
+检测器**不是**「命中即按声明严重度上报」。32 个检测器里有 18 个把模式分成两档（源码里的 `STRONG_PATTERNS` / `WEAK_PATTERNS`）：
+
+| 档位 | 判据 | 上报严重度 | 单条能否越过拒绝线 |
+|------|------|-----------|------------------|
+| **强信号** | 形态本身只可能来自攻击 | 检测器声明的等级 | 能 |
+| **弱信号** | 该 token「出现」而已，正常内容里遍地都是 | 固定 `Severity::Low`（5 分） | **不能** |
+
+两档走的是同一个检测器、同一个 `attack_type`，只有 `severity` 不同。弱信号**仍然被检出**，不会静默漏报：`scan()` 里看得到，`assess()` 里照常累加。
+
+对调用方的直接后果是：**单条弱信号不构成拒绝理由。** 参考流水线（[`examples/waf.rs:166`](./examples/waf.rs)）的拒绝线是 `risk.level >= RiskLevel::High`（40 分），而单条弱信号只有 5 分，进不了这一支。要看穿弱信号背后的攻击，得看 `assess()` 把多个检测器的命中叠起来之后的分数：
+
+```rust
+let scanner = Scanner::default();
+
+// 三条都是弱信号，各自命中不同的检测器 —— 叠起来才升级
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+// a.results == 3，a.score == 15（3 × Low）→ RiskLevel::Medium
+// 仍低于 High；同一请求里再叠加别的命中就会越线
+```
+
+被降为弱信号的是「出现即正常」的那类 token，例如：
+
+| 弱信号 | 为什么不能单独拒绝 |
+|--------|-------------------|
+| `<script src=...>`、`<iframe>`、`<link>`、`expression(` | 每个网页都有 |
+| 单级 `../` | 每份源码里的相对路径 |
+| 行首 `-2`、`+1` | Markdown 列表项、散文里的负数 |
+| 裸 `__proto__`（读原型） | 任何碰原型链的 JS |
+| `${env:}` / `${sys:}` | log4j2 的合法配置语法 |
+| `X-Forwarded-Host`、`X-Original-URL` | 反向代理自己就会加 |
+| `Host: 10.244.1.5`、`Host: localhost` | k8s pod 互调、本地开发 |
+| 裸 `10.0.0.5`、`192.168.1.1`、`127.0.0.1` | `X-Forwarded-For`、`bind 127.0.0.1` |
+| `//evil.com` 协议相对 URL | 源码注释、文档里的 CDN 链接 |
+| `information_schema` | PG 报错日志、SQL 教程 |
+
+上表只是举例。判据是**形态**不是文件名：同样是 `../`，单级 `../x` 是弱信号、多级 `../../` 是强信号（[`src/file/path_traversal.rs`](./src/file/path_traversal.rs)）。完整名单见各检测器的 `WEAK_PATTERNS`，以及下节各表中的 `弱` 标记。
+
 ---
 
 ## 设计架构
@@ -132,47 +171,49 @@ security-rust/
 
 32 个检测器按四大类装配，`Scanner::default()` 零配置全量启用；下表逐个列出各自覆盖的攻击模式与严重度。严重度只描述单条命中的危害，聚合后的整体风险看 `Scanner::assess()`。
 
+表内标注 `弱` 的模式属**弱信号**，上报 `Severity::Low`（5 分），不单独越过拒绝线（详见上节）。「严重度」一列为该检测器能达到的**上限**；标了 `弱` 的检测器同时存在强档与弱档，上半部分仍是其声明的等级。全档皆弱的检测器（`dns_rebinding`）上限即为 `Low`。
+
 ### 注入类攻击（11 个检测器）
 
 | 检测器 | 覆盖模式 | 严重度 |
 |--------|---------|--------|
-| **xss** | `<script>`、`onerror=` 等事件处理器、`javascript:` 伪协议、`<svg>`/`<iframe>` 标签、CSS `expression()`、`eval()`、`document.cookie` | Critical |
-| **sql_injection** | `UNION SELECT`、`sleep()`/`benchmark()`/`pg_sleep()` 延时注入、`information_schema` 枚举、`exec sp_`/`xp_` 存储过程、布尔盲注模式 `' OR '1'='1`、`LOAD_FILE()`/`INTO OUTFILE` | Critical |
-| **command_injection** | 反引号命令、`$()` 子命令、管道符链式执行、`/dev/tcp` 反弹 shell、`passthru()`/`shell_exec()`/`system()` PHP 函数、`cmd.exe`/`powershell` 调用 | Critical |
+| **xss** | `onerror=`/`onload=` 等事件处理器全表、`javascript:`/`vbscript:` 伪协议（只认 scheme 后紧跟非空白）；`弱`：`<script src=...>`/`<iframe>`/`<embed>`/`<object>`/`<link>` 标签、CSS `expression(` | Critical |
+| **sql_injection** | `UNION SELECT`、`sleep()`/`benchmark()`/`pg_sleep()` 延时注入（限语句位置）、`exec sp_`/`xp_` 存储过程、布尔盲注模式 `' OR '1'='1`、`LOAD_FILE()`/`INTO OUTFILE`、`DROP TABLE`/`INSERT INTO`、注释符拆词 `UN/**/ION`；`弱`：`information_schema` 词出现 | Critical |
+| **command_injection** | `/dev/tcp` 反弹 shell、`passthru()`/`shell_exec()`/`system("…")`/`popen()`/`pcntl_exec()` 调用形态、`powershell -Command`/`cmd.exe /c` 调用形态；`弱`：反引号 span、`$()` 子命令、管道符/`\|\|`/`&&` 链式执行、`exec(`、`>/dev/null`、`cat /etc/passwd` 这类 reader+路径、裸 `cmd.exe`/`powershell` 词 | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` 操作符、`$or` 注入、认证绕过 `{"$gt": ""}` | Critical |
 | **ldap_injection** | `(&` `(\|` `(!` 过滤操作符、`*(cn=` 属性枚举、`objectClass`/`uid` 注入 | High |
 | **xpath_injection** | `' or '1'='1` 布尔绕过、`' or true()` 函数注入、`'] \| '` 节点遍历 | High |
-| **jndi_injection** | `${jndi:ldap://`、`${lower:j}` 混淆、`${upper:j}` 混淆、`${::-j}` 空字符串混淆、`${env:}` 环境变量查找、`${sys:}` 系统属性 | Critical |
-| **ssi_injection** | `<!--#exec cmd=` 命令执行、`<!--#include file=` 文件包含、`<!--#echo var=` 变量输出、`<!--#fsize`/`<!--#flastmod` 文件信息 | High |
-| **graphql_injection** | `__schema`/`__type` 内省查询、深度嵌套 DoS（≥5层） | Medium |
-| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **定界符内的求值**（`{{7*7}}`、`${7*7}`、`{{config`、`${T(java.lang.Runtime)}`）、ERB `<%=` `<%@`、Velocity `#set()`、Python 逃逸链 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`；定界符本身不是信号，`${x}` 这类纯占位符不报 | Critical |
+| **jndi_injection** | `${jndi:` 查找本体、`${lower:j}`/`${upper:j}` 大小写折叠、`${::-j}` 空字符串折叠（只为混淆 `jndi` 而存在）；`弱`：`${env:}`/`${sys:}`/`${java:}` 合法 lookup 语法 | Critical |
+| **ssi_injection** | `<!--#exec cmd=` 命令执行、`<!--#include file=` 带绝对路径或 `..` 的包含、`<!--#printenv` 环境导出；`弱`：`<!--#echo var=` 变量输出、`<!--#fsize`/`<!--#flastmod` 文件信息、`<!--#config`、`<!--#include file="header.html"` 这类常规包含 | High |
+| **graphql_injection** | `__schema {`/`__type {` 带选择集的内省查询（散文里提到字段名不报）；`弱`：`__typename`（Apollo/Relay 自动加进每条查询）、≥5 层嵌套花括号 | Medium |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **定界符内的求值**（`{{7*7}}`、`${7*7}`、`{{config`、`${T(java.lang.Runtime)}`、`${@Type@method}`）、`{% include '/…'` / `..` 的模板 LFI、定界符内的逃逸链 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`、FreeMarker `?new(`；`弱`：`{% %}`、`<%=`/`<%@`、`#set(` 等裸模板指令、裸魔术属性；定界符本身不是信号，`${x}` 这类纯占位符不报 | Critical |
 | **format_string** | `%n`/`%hn`/`%1$n` 内存写入转换符、`%99999999d` 超宽宽度炸弹、`%x%x%x`/`%p%p%p` 连续读栈、`%08x.%08x` 带分隔泄露、连续 4 个以上 `%s` 逐栈读取；单个 `%s`/`%d` 属正常占位符不报 | Medium |
 
 ### 协议与请求攻击（11 个检测器）
 
 | 检测器 | 覆盖模式 | 严重度 |
 |--------|---------|--------|
-| **ssrf** | `169.254.169.254` 云元数据、RFC1918 内网 IP（10.x、172.16-31.x、192.168.x）、`127.x` loopback、`::1` IPv6 loopback、`0.0.0.0`、`gopher://`/`dict://`/`ftp://`/`file://` 危险协议 | Critical |
+| **ssrf** | `169.254.169.254` 云元数据与 `metadata.google.internal`（不要求 URL 上下文）、**URL authority 位置**（`//` 之后）的内网 IP `10.x`/`172.16-31.x`/`192.168.x`/`127.x`、`//localhost`、`//0.0.0.0`、`//[::1]`、危险协议 `gopher://`/`dict://`/`ftp://user@`/`file:///`；`弱`：**非 URL 位置**的同一批内网字面量（`X-Forwarded-For: 10.0.0.5`、`bind 127.0.0.1`、`{"host": "10.0.0.1"}` 逐字节同形） | Critical |
 | **xxe** | `<!ENTITY` 实体声明、`SYSTEM`/`PUBLIC` 外部引用、`%` 参数实体、`<!DOCTYPE` DTD 声明 | Critical |
-| **header_injection** | `%0d%0a` URL 编码 CRLF、`\r\n` 原始 CRLF 注入 | High |
-| **host_header** | 多 Host 头注入、`X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` 投毒、CRLF 携带 Host | High |
+| **header_injection** | 响应专有头前置 `\r\n`：`Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`、`%0d` 与 `%0a` 同现（含反序 `%0a…%0d`）。`Content-Length`/`Content-Type`/`Transfer-Encoding` 是**请求**头，与正常报文的每个头逐字节同形，不再作为信号（编码形态 `%0d%0aContent-Length:` 仍由 `%0d`+`%0a` 覆盖） | High |
+| **host_header** | **两个** `Host:` 头（RFC 7230 §5.4 要求一律回 400，两层解析器取值不一致）；`弱`：`X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` —— 代理自己也会加这几个头，与客户端伪造字节相同（`X-Forwarded-For`/`X-Forwarded-Proto` 不报） | High |
 | **request_smuggling** | 双重 `Transfer-Encoding` 头、`Content-Length: 0` 走私、`\r\n0\r\n` chunked 终止混淆 | High |
-| **open_redirect** | `//evil.com` 协议相对 URL、`javascript:`/`data:text/html` 伪协议跳转 | Medium |
-| **cors** | `Access-Control-Allow-Origin: null`、`Origin: null`（沙箱 iframe 与 CSWSH 的规范指示符）、`Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**。两者单独出现是公开 API 与静态资源的常态，不报 | Medium |
+| **open_redirect** | `javascript:`/`data:text/html`/`data:text/plain` 伪协议跳转（要求 scheme 后跟内容）；`弱`：`//evil.com` 协议相对 URL —— 源码注释与文档里的 CDN 链接同形 | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`、`Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**；`弱`：请求侧 `Origin: null`（沙箱 iframe、`data:` URL、本地文件的源就是 `null`，要服务端用 `ACAO: null` 回显才成立）。两者单独出现是公开 API 与静态资源的常态，不报 | Medium |
 | **websocket** | `Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）、`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`） | High |
-| **dns_rebinding** | Host 头为 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内网 IP、`localhost`、`::1`、`0.0.0.0` | High |
+| **dns_rebinding** | Host 头为 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 内网 IP、`localhost`、`[::1]`、`0.0.0.0`。**整个检测器只有弱档**：一律上报 `Low`，见「已知上限」 | Low |
 | **log4shell** | `${lower:j}`/`${upper:J}` 单字符大小写折叠、`${::-j}` 前缀折叠、`${env:…}ndi:` 等 lookup 展开后才拼出 JNDI（载荷不含 `jndi` 字面量）、`${${lower:…}}` 嵌套展开、`%24%7Blower%3Aj%7Dndi` URL 编码绕过 | Critical |
-| **hpp** | 同名参数重复（`?id=1&id=2`）、`&` 与 `;` 分隔符混用（`?a=1&b=2;c=3`，两层解析器得出不同的参数个数）；`;jsessionid=` 矩阵参数属路径分隔符，被排除 | Medium |
+| **hpp** | `&` 与 `;` 分隔符混用（`?a=1&b=2;c=3`，两层解析器得出不同的参数个数）；`弱`：同名参数重复（`?id=1&id=2`）—— 与正常多值参数 `?tag=rust&tag=web` 字节完全相同；`;jsessionid=` 矩阵参数属路径分隔符，被排除 | Medium |
 
 ### 数据与序列化攻击（7 个检测器）
 
 | 检测器 | 覆盖模式 | 严重度 |
 |--------|---------|--------|
-| **deserialization** | PHP `O:数字:`/`C:数字:` 序列化对象、`a:数字:{` 数组、`unserialize()` 调用、`__wakeup`/`__destruct`/`__toString` 等魔术方法 | Critical |
-| **csv_injection** | 行首 `=`/`+`/`-`/`@` 公式字符（制表符与回车是**分隔符**，不是公式起始）、分隔符 `,`/`;`/`\t` 之后紧跟非空白的 `=`（TSV/CSV 第二个单元格里的公式）、DDE 动态数据交换、`cmd\|` 命令管道、`@SUM()` 函数 | Medium |
-| **mail_header** | `Bcc:`/`Cc:` 密送注入、`From:` 多重发件人、`MIME-Version:`/`Content-Type: multipart` MIME 头注入、`boundary=` 边界操纵 | Medium |
+| **deserialization** | PHP `O:数字:`/`C:数字:` 序列化对象、`a:数字:{` 数组、`unserialize()` 调用、魔术方法**调用形态**（`__wakeup(`/`__destruct(`/`__construct(`/`__toString(`/`__get(`/`__set(`/`__call(`）；`弱`：裸魔术方法名（文档里讨论它们时同样命中） | Critical |
+| **csv_injection** | 分隔符 `,`/`;`/`\t` 之后紧跟非空白的 `=`（TSV/CSV 第二个单元格里的公式）、行首 `DDE`、行首 `cmd\|` 命令管道、行首 `@SUM(` 函数；`弱`：行首 `=`/`+`/`-` 且其后既非空白也非同族符号（`- item` 列表项、`---` 分隔线、`++i`、`= 5` 均不命中）。`@` 已整体移出粗粒度层（`@media`/`@import` 在样式表里遍地都是），只保留 `@SUM(`。制表符与回车是**分隔符**，不是公式起始 | Medium |
+| **mail_header** | 相邻两个 `From:` 头、行首 `MIME-Version:`（HTTP 的字段表里没有这个名字）；`弱`：行首 `Cc:`/`Bcc:` —— 与转发邮件、客服系统摄入的来信原文逐字节同形。`Content-Type: multipart` 与 `boundary=` **已删除**（`Content-Type: multipart/form-data` 是每个文件上传 POST 的标准头）。上限即 Medium（15 分），**不能单独越过拒绝线** | Medium |
 | **jwt_attack** | `alg: none` 空算法绕过、`kid` 路径遍历注入、空签名段、空 payload 段 | High |
-| **prototype_pollution** | `__proto__`/`constructor.prototype` 原型链污染、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` 属性劫持 | High |
+| **prototype_pollution** | `__proto__` 作键或被赋值（`"__proto__":`、`[__proto__]`、`__proto__ = x`）、`constructor.prototype`/`constructor[`、`__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__`、`hasOwnProperty[`；`弱`：裸 `__proto__`（`obj.__proto__` 读原型是语言本身的写法） | High |
 | **formula_injection** | `=cmd\|' /C calc'!A0` 命令管道、`HYPERLINK()`/`IMPORTXML()`/`IMPORTDATA()`/`WEBSERVICE()`/`RTD()`/`EXEC()` 等外带数据函数、`=rundll32\|…!A0` 任意二进制 + DDE 单元格引用、`DDE(` 载荷、legacy `@SUM(` 前缀公式。只报能执行命令或外带数据的载荷（High），纯算术公式 `=SUM(A1:A5)` 归粗粒度层 **csv_injection**（Medium） | High |
 | **redos** | 量词套量词 `(a+)+`/`(a*)*`/`(.+)+`、量词套有界重复 `(a+){2,}`、无界重复套量词 `(a{2,})*`、重叠分支 `(.\|x)+`/`(\d\|\w)*`、空分支 `(x\|)*`、同前缀分支 `(a\|ab)*`。防御方视角：把用户输入当正则编译前先扫一遍 | Medium |
 
@@ -180,9 +221,31 @@ security-rust/
 
 | 检测器 | 覆盖模式 | 严重度 |
 |--------|---------|--------|
-| **path_traversal** | `../`/`..\\` 目录跨越、`%2e%2e` URL 编码绕过、`php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` 协议包装器、`%00` 空字节截断 | Critical |
+| **path_traversal** | **多级**跨越 `(?:\.\./){2,}`/`(?:\.\.\\){2,}`、`%2e%2e`/`..%2f`/`..%5c` URL 编码绕过、`php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` 协议包装器、`%00` 空字节截断；`弱`：单级 `../`/`..\`（每份源码里的相对路径同形） | Critical |
 | **upload** | `<?php`/`<?=` PHP 标签、`<%@`/`<%=` ASP 标签、`eval($_`/`system($_`/`exec($_`/`passthru($_` 后门模式、`$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER` 超全局变量、`base64_decode()` 编码绕过 | Critical |
-| **data_leak** | 16 位信用卡 PAN（Visa/MasterCard/AmEx/Discover/JCB/Diners）、AWS Access Key `AKIA...`、PEM 私钥头 `-----BEGIN`、OpenAI/LLM API Key `sk-...`、数据库连接串 `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`、JWT Token | Critical |
+| **data_leak** | 16 位信用卡 PAN（Visa/MasterCard/AmEx/Discover/JCB/Diners）、AWS Access Key `AKIA...`、PEM 私钥头 `-----BEGIN`、OpenAI/LLM API Key `sk-...`、数据库连接串 `mongodb://`/`mysql://`/`postgresql://`/`redis://`（**必须带 `@` userinfo**：`mysql://root:secret@db` 报，`redis://shared-memory`、`postgres://localhost:5432/app` 这类是配置常态，**不报**）、`jdbc:`（无此约束）、JWT Token | Critical |
+
+---
+
+## 已知上限
+
+以下几处是**已知且有意保留**的边界，不是待修的缺陷。改动前请先读依据 —— 每一条都出自实测，且都有人试过收紧后撞上同一堵墙。
+
+### `dns_rebinding` 只上报，不拦截
+
+它的判据是「`Host:` 头里出现内网地址」，而同一个形状也正是 k8s 里每个 pod 间调用（`Host: 10.244.1.5:8080`）、每次本地开发（`Host: localhost:8000`）、每个 Docker 容器网络请求（`172.18.0.2`）。真正的 rebinding 看的是「公网域名 + 解析结果指向内网」，而浏览器发出的 `Host` 恰恰是那个公网域名 —— **单条字符串里看不到解析历史**，本检测器测的形态与攻击形态并不重合，收紧成什么样都还是「内网地址出现」。因此整个检测器只有弱档，一律 `Low`；无论叠加多少条，它自己都不会越过拒绝线。防护在解析**之后**比对结果 IP，不在字符串层。
+
+### 这个库扫不动自己的源码、测试和文档
+
+签名扫描器的天花板：实测本仓库 298 个文件里有 78 个越过拒绝线，而它们**按构造**全都含有攻击串 —— 测试载荷、检测器源码里的正则字面量自身，以及列出这些模式的 README 与 OWASP 表格。一份 README 不会因为写了 `(a+)+` 而变成缺陷。要扫自己的产物，得先把这些语料排除，或者换一个判据。
+
+### `upload` 一律把 `<%@` / `<?php` 报为 Critical
+
+该检测器的契约是「**这个 blob 是服务端可执行代码**」—— 出现即成立，因此不设强弱分层。JSP 页面与 JSP webshell 的前导字节逐字节相同（`<%@ page language="java" … %>` 与 `<%@ page import="java.io.*" %>` 是同一形态），把 `<%@`/`<%=` 降档等于让 webshell 落到拒绝线以下 —— 那是换个方式删检测。代价是扫描**正在对外提供的**页面（而不是上传的文件）时也会命中，那属于输入域不符 —— 命中消息 `Malicious file upload detected` 已点明域。
+
+### `path_traversal` 把 `(?:\.\./){2,}` 报为 Critical
+
+monorepo 里的深层相对路径（`from '../../../shared/domain'`）会命中。没有进一步收紧，因为唯一能把它与攻击分开的约束是目标文件名列表（`../etc/passwd` 那一类），而那只覆盖系统文件 —— 攻方换一个 LFI 目标就绕过去了。
 
 ---
 
@@ -213,8 +276,14 @@ security-rust/
 use security_rust::Scanner;
 
 let scanner = Scanner::default();
-let results = scanner.scan("<script>alert('xss')</script>");
-// [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+
+// 强信号：形态本身只可能来自攻击 ⇒ 按检测器声明的严重度上报
+let results = scanner.scan("<img src=x onerror=alert(1)>");
+// [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+// 弱信号：token 出现而已 ⇒ 固定 Low，不单独越过拒绝线（见「两档判定」）
+let weak = scanner.scan("<script src=\"/app.js\"></script>");
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 ```
 
 风险评分把命中列表汇成一个等级，避免多条低危信号被静默忽略：
@@ -290,7 +359,7 @@ let _ = throttle.record_failure(key, now);
 # 构建
 cargo build --release
 
-# 测试（494 个：365 单元 + 128 集成 + 1 文档测试）
+# 测试（580 个：431 单元 + 148 集成 + 1 文档测试）
 cargo test
 
 # 端到端流水线示例（扫描 → 限流 → 会话 → 处置）

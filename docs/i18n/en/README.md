@@ -95,6 +95,45 @@ The `session`, `throttle`, and `score` modules sit beside the scanner rather tha
 
 The zero-dependency constraint shapes the stateful modules too: tokens, signatures, and geo coordinates are all **supplied by the caller**, since parsing a JWT or resolving an IP would mean a new dependency. Both take a store trait (`SessionStore` / `ThrottleStore`), so a multi-instance deployment can back them with Redis without touching this crate.
 
+### Two Tiers: Strong and Weak Signals
+
+A detector does **not** report every hit at its declared severity. 18 of the 32 detectors split their patterns into two tiers (the `STRONG_PATTERNS` / `WEAK_PATTERNS` statics in the source):
+
+| Tier | Test | Reported severity | Can a single hit cross the reject line? |
+|------|------|-------------------|----------------------------------------|
+| **Strong** | The shape itself can only come from an attack | The detector's declared level | Yes |
+| **Weak** | The token merely *appears* — it is everywhere in ordinary content | Always `Severity::Low` (5 points) | **No** |
+
+Both tiers come from the same detector under the same `attack_type`; only `severity` differs. Weak signals are **still detected** — nothing is silently dropped. They show up in `scan()` and they still accumulate in `assess()`.
+
+The consequence for a caller is direct: **a single weak signal is not grounds for rejection.** The reference pipeline ([`examples/waf.rs:166`](../../../examples/waf.rs)) rejects at `risk.level >= RiskLevel::High` (40 points), and one weak signal is worth 5 — it cannot reach that branch. To see the attack behind weak signals, look at what `assess()` produces once hits from several detectors stack:
+
+```rust
+let scanner = Scanner::default();
+
+// Three weak signals from three different detectors — only the stack escalates
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+// a.results == 3, a.score == 15 (3 × Low) → RiskLevel::Medium
+// still below High; any further hit in the same request crosses the line
+```
+
+The patterns demoted to weak are the "appearing is normal" tokens:
+
+| Weak signal | Why it cannot reject on its own |
+|-------------|--------------------------------|
+| `<script src=...>`, `<iframe>`, `<link>`, `expression(` | Every web page has them |
+| A single-level `../` | Relative paths in every source file |
+| Line-leading `-2`, `+1` | Markdown list items, negative numbers in prose |
+| A bare `__proto__` (prototype read) | Any JS that touches the prototype chain |
+| `${env:}` / `${sys:}` | Valid log4j2 configuration syntax |
+| `X-Forwarded-Host`, `X-Original-URL` | Reverse proxies add them themselves |
+| `Host: 10.244.1.5`, `Host: localhost` | k8s pod-to-pod calls, local development |
+| Bare `10.0.0.5`, `192.168.1.1`, `127.0.0.1` | `X-Forwarded-For`, `bind 127.0.0.1` |
+| `//evil.com` protocol-relative URL | Source comments, CDN links in docs |
+| `information_schema` | PG error logs, SQL tutorials |
+
+That table is only a sample. The test is the **shape**, not the file name: for the same `../`, a single level (`../x`) is weak while multiple levels (`../../`) are strong ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). The full list lives in each detector's `WEAK_PATTERNS` and in the `weak` markers in the tables below.
+
 ---
 
 ## Architecture
@@ -130,49 +169,51 @@ The `Detector` trait is the detection layer's only contract: `fn detect(&self, i
 <img src="../../diagrams/features.svg" alt="security-rust features: injection 11, protocol 11, data 7, file 3, plus three stateful modules" width="900">
 
 All 32 detectors are assembled by category and enabled by default through `Scanner::default()` with zero configuration. The tables below list what each one covers and its severity. Severity describes a single hit; the aggregated risk is what `Scanner::assess()` returns.
+
+Patterns marked `weak` report `Severity::Low` (5 points) and cannot cross the reject line on their own (see the section above). The Severity column is the detector's **ceiling**: a detector with `weak` entries has both tiers, and its strong patterns still report the declared level. A detector that is weak in full (`dns_rebinding`) has a ceiling of `Low`.
 *(Diagram annotations are in Chinese; the labels are API names.)*
 
 ### Injection Attacks (11 Detectors)
 
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
-| **xss** | `<script>`, event handlers such as `onerror=`, the `javascript:` pseudo-protocol, `<svg>`/`<iframe>` tags, CSS `expression()`, `eval()`, `document.cookie` | Critical |
-| **sql_injection** | `UNION SELECT`, time-based injection via `sleep()`/`benchmark()`/`pg_sleep()`, `information_schema` enumeration, `exec sp_`/`xp_` stored procedures, boolean blind injection patterns like `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
-| **command_injection** | Backtick commands, `$()` subcommands, piped command chaining, `/dev/tcp` reverse shells, PHP functions `passthru()`/`shell_exec()`/`system()`, `cmd.exe`/`powershell` invocations | Critical |
+| **xss** | Event handlers such as `onerror=`/`onload=` (the full handler table), the `javascript:`/`vbscript:` pseudo-protocols (scheme followed by a non-blank); `weak`: `<script src=...>`/`<iframe>`/`<embed>`/`<object>`/`<link>` tags, CSS `expression(` | Critical |
+| **sql_injection** | `UNION SELECT`, time-based injection via `sleep()`/`benchmark()`/`pg_sleep()` (statement position only), `exec sp_`/`xp_` stored procedures, boolean blind injection patterns like `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE`, `DROP TABLE`/`INSERT INTO`, comment splitting (`UN/**/ION`); `weak`: the word `information_schema` | Critical |
+| **command_injection** | `/dev/tcp` reverse shells, `passthru()`/`shell_exec()`/`system("…")`/`popen()`/`pcntl_exec()` call forms, `powershell -Command`/`cmd.exe /c` call forms; `weak`: backtick spans, `$()` subcommands, pipe/`\|\|`/`&&` chaining, `exec(`, `>/dev/null`, `cat /etc/passwd`-style reader+path, bare `cmd.exe`/`powershell` words | Critical |
 | **nosql_injection** | MongoDB operators `$ne`/`$gt`/`$regex`/`$where`, `$or` injection, authentication bypass via `{"$gt": ""}` | Critical |
 | **ldap_injection** | Filter operators `(&` `(\|` `(!`, `*(cn=` attribute enumeration, `objectClass`/`uid` injection | High |
 | **xpath_injection** | Boolean bypass `' or '1'='1`, function injection `' or true()`, node traversal `'] \| '` | High |
-| **jndi_injection** | `${jndi:ldap://`, `${lower:j}` obfuscation, `${upper:j}` obfuscation, `${::-j}` empty-string obfuscation, `${env:}` environment variable lookups, `${sys:}` system properties | Critical |
-| **ssi_injection** | Command execution via `<!--#exec cmd=`, file inclusion via `<!--#include file=`, variable output via `<!--#echo var=`, file info via `<!--#fsize`/`<!--#flastmod` | High |
-| **graphql_injection** | `__schema`/`__type` introspection queries, deeply nested DoS (≥5 levels) | Medium |
-| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **evaluation inside the delimiters** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python escape chains `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; the delimiters alone are not a signal, so a plain placeholder like `${x}` is not reported | Critical |
+| **jndi_injection** | `${jndi:` lookups proper, `${lower:j}`/`${upper:j}` case folding, `${::-j}` empty-string folding (all exist only to obfuscate `jndi`); `weak`: `${env:}`/`${sys:}`/`${java:}` — valid lookup syntax | Critical |
+| **ssi_injection** | Command execution via `<!--#exec cmd=`, inclusion via `<!--#include file=` with an absolute path or `..`, environment dump via `<!--#printenv`; `weak`: `<!--#echo var=`, `<!--#fsize`/`<!--#flastmod`, `<!--#config`, routine inclusions like `<!--#include file="header.html"` | High |
+| **graphql_injection** | Introspection in query form, `__schema {`/`__type {` (mentioning the field name in prose is not reported); `weak`: `__typename` (Apollo/Relay add it to every query), ≥5 levels of nested braces | Medium |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **evaluation inside the delimiters** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`, `${@Type@method}`), template LFI via `{% include '/…'` / `..`, escape chains inside delimiters `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`, FreeMarker `?new(`; `weak`: bare template directives `{% %}`/`<%=`/`<%@`/`#set(`, bare magic attributes; the delimiters alone are not a signal, so a plain placeholder like `${x}` is not reported | Critical |
 | **format_string** | Memory write via `%n`/`%hn`/`%lln`/`%1$n`, width bombs `%99999999d`, stack reads `%x%x%x`/`%p%p%p`, delimited dumps `%08x.%08x.%08x.%08x`, four or more consecutive `%s`, mixed `%s%x%p%n` chains | Medium |
 
 ### Protocol and Request Attacks (11 Detectors)
 
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
-| **ssrf** | `169.254.169.254` cloud metadata, RFC1918 private IPs (10.x, 172.16-31.x, 192.168.x), `127.x` loopback, `::1` IPv6 loopback, `0.0.0.0`, dangerous protocols `gopher://`/`dict://`/`ftp://`/`file://` | Critical |
+| **ssrf** | `169.254.169.254` cloud metadata and `metadata.google.internal` (no URL context required), private IPs in **URL authority position** (after `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, dangerous protocols `gopher://`/`dict://`/`ftp://user@`/`file:///`; `weak`: the same private literals in **non-URL** positions (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` are byte-identical) | Critical |
 | **xxe** | `<!ENTITY` entity declarations, `SYSTEM`/`PUBLIC` external references, `%` parameter entities, `<!DOCTYPE` DTD declarations | Critical |
-| **header_injection** | Raw `\r\n` CRLF injection before a security-relevant response header (`Set-Cookie`, `Location`, `Content-Length`, `Content-Type`, `Transfer-Encoding`, `Refresh`, `Status`, `WWW-Authenticate`), URL-encoded CRLF `%0d...%0a`, reversed LF-CR order `%0a...%0d` | High |
-| **host_header** | Multiple Host header injection, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` poisoning, CRLF smuggling in Host | High |
+| **header_injection** | Response-only headers preceded by `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, or `%0d` together with `%0a` (including reversed `%0a...%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` are **request** headers, byte-identical to the header of any well-formed request, so they are no longer signals (the encoded form `%0d%0aContent-Length:` is still covered by `%0d`+`%0a`) | High |
+| **host_header** | **Two** `Host:` headers (RFC 7230 §5.4 mandates a 400, two parsers disagree); `weak`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — proxies add these themselves, byte-identical to client forgery (`X-Forwarded-For`/`X-Forwarded-Proto` are not reported at all) | High |
 | **request_smuggling** | Duplicate `Transfer-Encoding` headers, `Content-Length: 0` smuggling, `\r\n0\r\n` chunked termination obfuscation | High |
-| **open_redirect** | Protocol-relative URLs `//evil.com`, pseudo-protocol redirects via `javascript:`/`data:text/html` | Medium |
-| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (the canonical indicator for sandboxed iframes and CSWSH), and `Access-Control-Allow-Origin: *` **together with** `Access-Control-Allow-Credentials: true`. Either one alone is normal for public APIs and static assets and is not reported | Medium |
+| **open_redirect** | Pseudo-protocol redirects via `javascript:`/`data:text/html`/`data:text/plain` (scheme followed by content); `weak`: protocol-relative URLs `//evil.com` — identical to CDN links in source comments and docs | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, and `Access-Control-Allow-Origin: *` **together with** `Access-Control-Allow-Credentials: true`; `weak`: request-side `Origin: null` (sandboxed iframes, `data:` URLs and local files have that origin — it needs an `ACAO: null` echo to hold). Either one alone is normal for public APIs and static assets and is not reported | Medium |
 | **websocket** | `Origin: null` co-occurring with a WebSocket upgrade (CSWSH), `ws://` targeting loopback / private / link-local addresses (including the cloud metadata endpoint `169.254.169.254`) | High |
-| **dns_rebinding** | Host header as private IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
+| **dns_rebinding** | Host header as private IP `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `[::1]`, `0.0.0.0`. **The detector is weak in full**: it always reports `Low` — see Known Limits | Low |
 | **log4shell** | `${lower:j}`/`${upper:J}` case-folding, `${::-j}` prefix folding, `${<lookup>:...}ndi:` where the lookup expands into `jndi`, nested `${${<lookup>...}}` expansion, URL-encoded `%24%7b...%7d...ndi` | Critical |
-| **hpp** | Mixed `&`/`;` parameter separators (`?a=1&b=2;c=3`) that make two parser layers disagree, repeated keys such as `?id=1&id=2` | Medium |
+| **hpp** | Mixed `&`/`;` parameter separators (`?a=1&b=2;c=3`) that make two parser layers disagree; `weak`: repeated keys such as `?id=1&id=2` — byte-identical to a legitimate multi-value parameter such as `?tag=rust&tag=web` | Medium |
 
 ### Data and Serialization Attacks (7 Detectors)
 
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
-| **deserialization** | PHP serialized objects `O:<digits>:`/`C:<digits>:`, arrays `a:<digits>:{`, `unserialize()` calls, magic methods such as `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Formula characters `=`/`+`/`-`/`@` at the start of a cell (tab and carriage return are **separators**, not formula starts), an `=` directly followed by a non-blank after a `,`/`;`/`\t` separator (a formula in the second cell of a TSV/CSV row), DDE (Dynamic Data Exchange), command pipe `cmd\|`, `@SUM()` functions | Medium |
-| **mail_header** | Blind carbon copy injection via `Bcc:`/`Cc:`, multiple senders in `From:`, MIME header injection via `MIME-Version:`/`Content-Type: multipart`, `boundary=` manipulation | Medium |
+| **deserialization** | PHP serialized objects `O:<digits>:`/`C:<digits>:`, arrays `a:<digits>:{`, `unserialize()` calls, magic methods in **call form** (`__wakeup(`/`__destruct(`/`__construct(`/`__toString(`/`__get(`/`__set(`/`__call(`); `weak`: bare magic-method names (docs discussing them also hit) | Critical |
+| **csv_injection** | An `=` directly followed by a non-blank after a `,`/`;`/`\t` separator (a formula in the second cell of a TSV/CSV row), line-leading `DDE`, line-leading `cmd\|`, line-leading `@SUM(`; `weak`: line-leading `=`/`+`/`-` followed by neither a blank nor another delimiter character (`- item` list items, `---` rules, `++i`, `= 5` do not hit). `@` was dropped from the coarse tier entirely (`@media`/`@import` are everywhere in stylesheets); only `@SUM(` remains. Tab and carriage return are **separators**, not formula starts | Medium |
+| **mail_header** | Two adjacent `From:` headers, line-leading `MIME-Version:` (a name absent from the HTTP field table); `weak`: line-leading `Cc:`/`Bcc:` — byte-identical to forwarded mail and ingested message bodies. `Content-Type: multipart` and `boundary=` were **deleted** (`Content-Type: multipart/form-data` is the standard header of every file-upload POST). The ceiling is Medium (15 points): it **cannot cross the reject line on its own** | Medium |
 | **jwt_attack** | `alg: none` algorithm bypass, `kid` path traversal injection, empty signature segment, empty payload segment | High |
-| **prototype_pollution** | Prototype chain pollution via `__proto__`/`constructor.prototype`, property hijacking via `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
+| **prototype_pollution** | `__proto__` as a key or assignment target (`"__proto__":`, `[__proto__]`, `__proto__ = x`), `constructor.prototype`/`constructor[`, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__`, `hasOwnProperty[`; `weak`: a bare `__proto__` (`obj.__proto__` is simply how the language reads a prototype) | High |
 | **formula_injection** | Command pipe `=cmd\|' /C calc'!A0`, DDE cell references such as `=rundll32\|...!A0`, data-exfiltration functions `HYPERLINK()`/`IMPORTXML()`/`IMPORTDATA()`/`IMPORTRANGE()`/`IMPORTFEED()`/`WEBSERVICE()`/`FILTERXML()`/`RTD()`/`EXEC()`, `DDE(` payloads, legacy `@SUM()`-style formulas | High |
 | **redos** | Nested quantifiers `(a+)+`/`(a*)*`/`(\w+\s?)*`, quantifier over bounded repetition `(a+){2,}`, `(a{2,})*`, overlapping alternation `(.\|x)+`/`(\d\|\w)*`, empty branches `(x\|)*` | Medium |
 
@@ -180,9 +221,31 @@ All 32 detectors are assembled by category and enabled by default through `Scann
 
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
-| **path_traversal** | Directory traversal via `../`/`..\\`, URL-encoded bypass `%2e%2e`, protocol wrappers `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, null-byte truncation `%00` | Critical |
+| **path_traversal** | **Multi-level** traversal `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, URL-encoded bypass `%2e%2e`/`..%2f`/`..%5c`, protocol wrappers `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, null-byte truncation `%00`; `weak`: a single-level `../`/`..\` (identical to a relative path in source or docs) | Critical |
 | **upload** | PHP tags `<?php`/`<?=`, ASP tags `<%@`/`<%=`, backdoor patterns `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobals `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, encoding bypass via `base64_decode()` | Critical |
-| **data_leak** | 16-digit credit card PANs (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM private key headers `-----BEGIN`, OpenAI/LLM API Keys `sk-...`, database connection strings `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, JWT tokens | Critical |
+| **data_leak** | 16-digit credit card PANs (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM private key headers `-----BEGIN`, OpenAI/LLM API Keys `sk-...`, database connection strings `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**must carry `@` userinfo**: `mysql://root:secret@db` is reported, `redis://shared-memory` and `postgres://localhost:5432/app` are ordinary config and are **not**), `jdbc:` (no such constraint), JWT tokens | Critical |
+
+---
+
+## Known Limits
+
+The following are **known, deliberately retained** boundaries, not defects awaiting a fix. Each one has measured evidence behind it, and each has already defeated an attempt to tighten it.
+
+### `dns_rebinding` reports, it does not block
+
+Its test is "an internal address appears in `Host:`" — and that same shape is every k8s pod-to-pod call (`Host: 10.244.1.5:8080`), every local development request (`Host: localhost:8000`), and every Docker container-network call (`172.18.0.2`). Real rebinding is "a public domain name + a resolution result pointing inward", and the `Host` the browser sends is precisely that public name — **a single string carries no resolution history**, so the shape this detector tests does not overlap the attack shape. No tightening exists: whatever constraint you add, the test is still "an internal address appears". The detector is therefore weak in full and always reports `Low`; no amount of stacking makes it cross the reject line by itself. Protection belongs after resolution, comparing the resulting IP — not in the string layer.
+
+### This crate cannot scan its own source, tests, or docs
+
+The signature scanner's ceiling: measured over this repository, 78 of 298 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
+
+### `upload` reports `<%@` / `<?php` as Critical wherever they appear
+
+The detector's contract is "**this blob is server-side executable code**" — the mere presence establishes it, so there is no tier split. A JSP page and a JSP webshell share their preamble byte for byte (`<%@ page language="java" … %>` and `<%@ page import="java.io.*" %>` are the same shape); demoting `<%@`/`<%=` would drop webshell detection below the reject line — that is deletion by another name. The cost is that scanning a page **currently being served** (rather than an uploaded file) also hits; that is an input-domain mismatch — the hit message `Malicious file upload detected` names the domain.
+
+### `path_traversal` reports `(?:\.\./){2,}` as Critical
+
+A deep relative path in a monorepo (`from '../../../shared/domain'`) matches. It is not tightened further because the only constraint that separates it from an attack is a target-name list (`../etc/passwd` and friends), which covers system files only — an attacker simply picks a different LFI target.
 
 ---
 
@@ -214,8 +277,14 @@ Ready to use with zero configuration:
 use security_rust::Scanner;
 
 let scanner = Scanner::default();
-let results = scanner.scan("<script>alert('xss')</script>");
-// [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+
+// Strong signal: the shape can only come from an attack ⇒ the detector's declared severity
+let results = scanner.scan("<img src=x onerror=alert(1)>");
+// [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+// Weak signal: the token merely appears ⇒ always Low, cannot cross the reject line alone
+let weak = scanner.scan("<script src=\"/app.js\"></script>");
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 ```
 
 Risk scoring turns the hit list into a single level, so stacked low-severity signals are not silently ignored:
@@ -303,7 +372,7 @@ See the [API Reference](./API.md) for the complete API documentation (installati
 # Build
 cargo build --release
 
-# Tests (494: 365 unit + 128 integration + 1 doc test)
+# Tests (580: 431 unit + 148 integration + 1 doc test)
 cargo test
 
 # End-to-end pipeline example (scan → throttle → session → action)

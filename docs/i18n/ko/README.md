@@ -93,6 +93,45 @@ security-rust/
 | 제로 의존성 vs 편의성 | 제로 의존성 | token과 서명은 호출자가 준비하고, 위치 정보(위도/경도)도 호출자가 파싱한다. 대신 의존성 추가도, 암묵적 I/O도 없다 |
 | fail-closed vs 가용성 | 용도에 따라 분리 | `SessionGuard`는 저장소 장애 시 `Decision::Block`을 반환한다(fail-closed, 절대 통과시키지 않음). `Throttle`은 `ThrottleDecision::Unavailable`을 반환해 판단을 호출자에게 넘긴다 —— 전체 사용자를 막는 것은 자기 DoS이며, 속도 제한은 주된 인증 게이트가 아니기 때문이다 |
 
+### 2단계 판정: 강한 신호와 약한 신호
+
+탐지기는 **"적중하면 선언된 심각도로 보고한다"가 아닙니다**. 32개 탐지기 중 18개가 패턴을 두 단계로 나눕니다(소스의 `STRONG_PATTERNS` / `WEAK_PATTERNS`):
+
+| 단계 | 판정 기준 | 보고되는 심각도 | 단일 적중이 거부선을 넘는가 |
+|------|------|-----------|------------------|
+| **강한 신호** | 그 형태 자체가 공격에서만 나올 수 있다 | 탐지기가 선언한 등급 | 넘는다 |
+| **약한 신호** | 그 토큰이 "출현"했을 뿐, 정상 콘텐츠에도 널려 있다 | 항상 `Severity::Low`(5점) | **넘지 못한다** |
+
+두 단계는 같은 탐지기, 같은 `attack_type`을 지나며 `severity`만 다릅니다. 약한 신호도 **여전히 탐지됩니다** —— 조용히 누락되지 않습니다: `scan()`에서 보이고 `assess()`에서도 정상적으로 누적됩니다.
+
+호출자에게 미치는 직접적 결과는 이렇습니다: **단일 약한 신호는 거부 사유가 되지 않습니다.** 참조 파이프라인([`examples/waf.rs:166`](../../../examples/waf.rs))의 거부선은 `risk.level >= RiskLevel::High`(40점)인데, 단일 약한 신호는 5점뿐이라 이 분기에 들어가지 않습니다. 약한 신호 뒤의 공격을 보려면 `assess()`가 여러 탐지기의 적중을 겹쳐 만든 점수를 봅니다:
+
+```rust
+let scanner = Scanner::default();
+
+// 세 건 모두 약한 신호이고 각각 다른 탐지기에 적중 —— 겹쳐야 승격된다
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+// a.results == 3, a.score == 15(3 × Low) → RiskLevel::Medium
+// 그래도 High 미만. 같은 요청에 다른 적중이 더 겹치면 넘는다
+```
+
+약한 신호로 내려간 것은 "출현 자체가 정상"인 토큰입니다:
+
+| 약한 신호 | 단독으로 거부할 수 없는 이유 |
+|--------|-------------------|
+| `<script src=...>`, `<iframe>`, `<link>`, `expression(` | 모든 웹 페이지에 있다 |
+| 단일 단계 `../` | 모든 소스 파일에 있는 상대 경로 |
+| 행두 `-2`, `+1` | Markdown 목록 항목, 산문의 음수 |
+| 맨 `__proto__`(프로토타입 읽기) | 프로토타입 체인을 건드리는 JS라면 어디에나 |
+| `${env:}` / `${sys:}` | log4j2의 정당한 설정 문법 |
+| `X-Forwarded-Host`, `X-Original-URL` | 리버스 프록시 자신이 붙인다 |
+| `Host: 10.244.1.5`, `Host: localhost` | k8s pod 간 호출, 로컬 개발 |
+| 맨 `10.0.0.5`, `192.168.1.1`, `127.0.0.1` | `X-Forwarded-For`, `bind 127.0.0.1` |
+| `//evil.com` 프로토콜 상대 URL | 소스 주석, 문서 안의 CDN 링크 |
+| `information_schema` | PG 오류 로그, SQL 튜토리얼 |
+
+위 표는 예시일 뿐입니다. 판정 기준은 **형태**이지 파일 이름이 아닙니다: 같은 `../`라도 단일 단계 `../x`는 약한 신호, 다단계 `../../`는 강한 신호입니다([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). 전체 목록은 각 탐지기의 `WEAK_PATTERNS`와 아래 각 표의 `약` 표시를 참고하십시오.
+
 ---
 
 ## 설계 아키텍처
@@ -130,47 +169,49 @@ security-rust/
 32개 탐지기는 4대 분류별로 장착되며 `Scanner::default()`로 설정 없이 전부 활성화된다. 아래 표는 각 탐지기가 커버하는 공격 패턴과 심각도를 나열한다. 심각도는 단일 적중의 위험만 나타내며, 집계된 전체 위험은 `Scanner::assess()`를 본다.
 *(다이어그램 주석은 중국어이며, 레이블은 API 이름이다.)*
 
+표에서 `약`이 붙은 패턴은 **약한 신호**로, `Severity::Low`(5점)를 보고하며 단독으로는 거부선을 넘지 못한다(앞 절 참고). "심각도" 열은 그 탐지기가 도달할 수 있는 **상한**이다. `약`이 붙은 탐지기는 강한 단계와 약한 단계를 함께 가지며, 위쪽 절반은 여전히 선언된 등급을 보고한다. 전 단계가 약한 탐지기(`dns_rebinding`)의 상한은 `Low`다.
+
 ### 인젝션 공격 (11개 탐지기)
 
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
-| **xss** | `<script>`, `onerror=` 등 이벤트 핸들러, `javascript:` 의사 프로토콜, `<svg>`/`<iframe>` 태그, CSS `expression()`, `eval()`, `document.cookie` | Critical |
-| **sql_injection** | `UNION SELECT`, `sleep()`/`benchmark()`/`pg_sleep()` 지연 인젝션, `information_schema` 열거, `exec sp_`/`xp_` 저장 프로시저, 불리언 블라인드 패턴 `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
-| **command_injection** | 백틱 명령, `$()` 서브셸, 파이프 기호 연쇄 실행, `/dev/tcp` 리버스 셸, `passthru()`/`shell_exec()`/`system()` PHP 함수, `cmd.exe`/`powershell` 호출 | Critical |
+| **xss** | `onerror=`/`onload=` 등 이벤트 핸들러 전체, `javascript:`/`vbscript:` 의사 프로토콜(scheme 바로 뒤에 비공백이 오는 형태만); `약`: `<script src=...>`/`<iframe>`/`<embed>`/`<object>`/`<link>` 태그, CSS `expression(` | Critical |
+| **sql_injection** | `UNION SELECT`, `sleep()`/`benchmark()`/`pg_sleep()` 지연 인젝션(문장 위치에 한정), `exec sp_`/`xp_` 저장 프로시저, 불리언 블라인드 패턴 `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE`, `DROP TABLE`/`INSERT INTO`, 주석 분할 `UN/**/ION`; `약`: `information_schema`라는 단어의 출현 | Critical |
+| **command_injection** | `/dev/tcp` 리버스 셸, `passthru()`/`shell_exec()`/`system("…")`/`popen()`/`pcntl_exec()` 호출 형태, `powershell -Command`/`cmd.exe /c` 호출 형태; `약`: 백틱 span, `$()` 서브셸, 파이프/`\|\|`/`&&` 연쇄 실행, `exec(`, `>/dev/null`, `cat /etc/passwd` 같은 reader+경로, 맨 `cmd.exe`/`powershell` 단어 | Critical |
 | **nosql_injection** | MongoDB `$ne`/`$gt`/`$regex`/`$where` 연산자, `$or` 인젝션, 인증 우회 `{"$gt": ""}` | Critical |
 | **ldap_injection** | `(&` `(\|` `(!` 필터 연산자, `*(cn=` 속성 열거, `objectClass`/`uid` 인젝션 | High |
 | **xpath_injection** | `' or '1'='1` 불리언 우회, `' or true()` 함수 인젝션, `'] \| '` 노드 순회 | High |
-| **jndi_injection** | `${jndi:ldap://`, `${lower:j}` 난독화, `${upper:j}` 난독화, `${::-j}` 빈 문자열 난독화, `${env:}` 환경 변수 조회, `${sys:}` 시스템 속성 | Critical |
-| **ssi_injection** | `<!--#exec cmd=` 명령 실행, `<!--#include file=` 파일 포함, `<!--#echo var=` 변수 출력, `<!--#fsize`/`<!--#flastmod` 파일 정보 | High |
-| **graphql_injection** | `__schema`/`__type` 인트로스펙션 쿼리, 심층 중첩 DoS(5단계 이상) | Medium |
-| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **구분자 내부의 평가**(`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, Python 이스케이프 체인 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; 구분자 자체는 신호가 아니므로 `${x}` 같은 단순 플레이스홀더는 보고하지 않는다 | Critical |
+| **jndi_injection** | `${jndi:` 조회 본체, `${lower:j}`/`${upper:j}` 대소문자 접기, `${::-j}` 빈 문자열 접기(`jndi`를 난독화하기 위해서만 존재); `약`: `${env:}`/`${sys:}`/`${java:}` 정당한 lookup 문법 | Critical |
+| **ssi_injection** | `<!--#exec cmd=` 명령 실행, 절대 경로나 `..`를 동반한 `<!--#include file=`, `<!--#printenv` 환경 변수 출력; `약`: `<!--#echo var=` 변수 출력, `<!--#fsize`/`<!--#flastmod` 파일 정보, `<!--#config`, `<!--#include file="header.html"` 같은 통상적 포함 | High |
+| **graphql_injection** | 선택 집합을 동반한 `__schema {`/`__type {` 인트로스펙션 쿼리(산문에서 필드 이름을 언급한 것만으로는 보고하지 않음); `약`: `__typename`(Apollo/Relay가 모든 쿼리에 자동으로 넣는다), 5단계 이상의 중첩 중괄호 | Medium |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` **구분자 내부의 평가**(`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`, `${@Type@method}`), `{% include '/…'` / `..`를 통한 템플릿 LFI, 구분자 내부의 이스케이프 체인 `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`, FreeMarker `?new(`; `약`: `{% %}`, `<%=`/`<%@`, `#set(` 등 맨 템플릿 지시자, 맨 매직 속성. 구분자 자체는 신호가 아니므로 `${x}` 같은 단순 플레이스홀더는 보고하지 않는다 | Critical |
 | **format_string** | `%n`/`%hn`/`%lln` 메모리 쓰기 변환자, `%99999999d` 너비 폭탄, 연속 `%x%x%x`·구분자 포함 `%08x.%08x.%08x.%08x` 스택 읽기, 연속 `%s` | Medium |
 
 ### 프로토콜 및 요청 공격 (11개 탐지기)
 
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
-| **ssrf** | `169.254.169.254` 클라우드 메타데이터, RFC1918 사설 IP(10.x, 172.16-31.x, 192.168.x), `127.x` 루프백, `::1` IPv6 루프백, `0.0.0.0`, `gopher://`/`dict://`/`ftp://`/`file://` 위험 프로토콜 | Critical |
+| **ssrf** | `169.254.169.254` 클라우드 메타데이터와 `metadata.google.internal`(URL 문맥을 요구하지 않음), **URL authority 위치**(`//` 뒤)의 사설 IP `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, 위험 프로토콜 `gopher://`/`dict://`/`ftp://user@`/`file:///`; `약`: **URL이 아닌 위치**의 같은 사설 리터럴(`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}`은 바이트 단위로 동형) | Critical |
 | **xxe** | `<!ENTITY` 엔티티 선언, `SYSTEM`/`PUBLIC` 외부 참조, `%` 파라미터 엔티티, `<!DOCTYPE` DTD 선언 | Critical |
-| **header_injection** | `%0d%0a` URL 인코딩 CRLF, `\r\n` 원본 CRLF 인젝션, `%0d`/`%0a` 역순 쌍(LF-CR) | High |
-| **host_header** | 다중 Host 헤더 인젝션, `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` 포이즈닝, Host에 딸린 CRLF | High |
+| **header_injection** | 응답 전용 헤더 앞의 `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, `%0d`와 `%0a`의 동시 출현(역순 `%0a…%0d` 포함). `Content-Length`/`Content-Type`/`Transfer-Encoding`은 **요청** 헤더로, 정상 메시지의 모든 헤더와 바이트 단위로 동형이므로 더 이상 신호가 아니다(인코딩 형태 `%0d%0aContent-Length:`는 여전히 `%0d`+`%0a`가 잡는다) | High |
+| **host_header** | **두 개**의 `Host:` 헤더(RFC 7230 §5.4는 일괄 400을 요구한다. 두 계층 파서의 해석이 갈린다); `약`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` —— 프록시 자신도 붙이는 헤더로, 클라이언트 위조와 바이트 단위로 같다(`X-Forwarded-For`/`X-Forwarded-Proto`는 보고하지 않는다) | High |
 | **request_smuggling** | 이중 `Transfer-Encoding` 헤더, `Content-Length: 0` 스머글링, `\r\n0\r\n` chunked 종료 난독화 | High |
-| **open_redirect** | `//evil.com` 프로토콜 상대 URL, `javascript:`/`data:text/html` 의사 프로토콜 점프 | Medium |
-| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null`(샌드박스 iframe과 CSWSH의 정규 지표), 그리고 `Access-Control-Allow-Origin: *`와 `Access-Control-Allow-Credentials: true`의 **동시 출현**. 단독으로는 공개 API와 정적 자산에서 정상이므로 보고하지 않는다 | Medium |
+| **open_redirect** | `javascript:`/`data:text/html`/`data:text/plain` 의사 프로토콜 점프(scheme 뒤에 내용을 요구); `약`: `//evil.com` 프로토콜 상대 URL —— 소스 주석과 문서 안의 CDN 링크와 동형 | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, 그리고 `Access-Control-Allow-Origin: *`와 `Access-Control-Allow-Credentials: true`의 **동시 출현**; `약`: 요청 측 `Origin: null`(샌드박스 iframe, `data:` URL, 로컬 파일의 오리진이 `null`이며, 서버가 `ACAO: null`로 되돌려줘야 성립한다). 단독으로는 공개 API와 정적 자산에서 정상이므로 보고하지 않는다 | Medium |
 | **websocket** | `Origin: null` 과 WebSocket 업그레이드의 동시 출현(CSWSH), `ws://` 가 루프백/사설/링크 로컬 주소를 가리키는 경우(클라우드 메타데이터 엔드포인트 `169.254.169.254` 포함) | High |
-| **dns_rebinding** | Host 헤더가 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 사설 IP, `localhost`, `::1`, `0.0.0.0`인 경우 | High |
+| **dns_rebinding** | Host 헤더가 `127.x`/`10.x`/`192.168.x`/`172.16-31.x` 사설 IP, `localhost`, `[::1]`, `0.0.0.0`인 경우. **탐지기 전체가 약한 단계뿐이다**: 일괄 `Low`를 보고한다("알려진 한계" 참고) | Low |
 | **log4shell** | `${lower:j}`/`${upper:J}` 대소문자 접기, `${::-j}` 접두사 접기, lookup 전개 후 `ndi:`가 나타나는 난독화, `${${...}}` 중첩 전개, URL 인코딩 형태 `%24%7b...%7d` | Critical |
-| **hpp** | `;`와 `&` 혼용(`a=1&b=2;c=3`), 파라미터 키 중복 —— 파서마다 해석이 갈리는 HTTP 파라미터 폴루션 | Medium |
+| **hpp** | `&`와 `;` 구분자 혼용(`?a=1&b=2;c=3`, 두 계층 파서가 서로 다른 파라미터 개수를 낸다); `약`: 같은 이름 파라미터의 중복(`?id=1&id=2`) —— 정상적인 다중값 파라미터 `?tag=rust&tag=web`과 바이트 단위로 같다; `;jsessionid=` 행렬 파라미터는 경로 구분자이므로 제외 | Medium |
 
 ### 데이터 및 직렬화 공격 (7개 탐지기)
 
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
-| **deserialization** | PHP `O:숫자:`/`C:숫자:` 직렬화 객체, `a:숫자:{` 배열, `unserialize()` 호출, `__wakeup`/`__destruct`/`__toString` 등 매직 메서드 | Critical |
-| **csv_injection** | 셀 선두의 `=`/`+`/`-`/`@` 수식 문자(탭과 캐리지 리턴은 **구분자**이며 수식 시작이 아니다), 구분자 `,`/`;`/`\t` 직후의 `=`, DDE 동적 데이터 교환, `cmd\|` 명령 파이프, `@SUM()` 함수 | Medium |
-| **mail_header** | `Bcc:`/`Cc:` 숨은 참조 인젝션, `From:` 다중 발신자, `MIME-Version:`/`Content-Type: multipart` MIME 헤더 인젝션, `boundary=` 경계 조작 | Medium |
+| **deserialization** | PHP `O:숫자:`/`C:숫자:` 직렬화 객체, `a:숫자:{` 배열, `unserialize()` 호출, 매직 메서드의 **호출 형태**(`__wakeup(`/`__destruct(`/`__construct(`/`__toString(`/`__get(`/`__set(`/`__call(`); `약`: 맨 매직 메서드 이름(이들을 설명하는 문서에서도 똑같이 적중한다) | Critical |
+| **csv_injection** | 구분자 `,`/`;`/`\t` 직후에 비공백이 이어지는 `=`(TSV/CSV 두 번째 셀의 수식), 행두 `DDE`, 행두 `cmd\|` 명령 파이프, 행두 `@SUM(`; `약`: 행두 `=`/`+`/`-`이면서 그 뒤가 공백도 동족 기호도 아닌 것(`- item` 목록 항목, `---` 구분선, `++i`, `= 5`는 모두 적중하지 않는다). `@`는 거친 단계에서 전면 제외했다(`@media`/`@import`는 스타일시트에 널려 있다) —— `@SUM(`만 남긴다. 탭과 캐리지 리턴은 **구분자**이며 수식 시작이 아니다 | Medium |
+| **mail_header** | 인접한 두 개의 `From:` 헤더, 행두 `MIME-Version:`(HTTP 필드 표에 없는 이름); `약`: 행두 `Cc:`/`Bcc:` —— 전달 메일이나 상담 시스템이 수집한 수신 메일 본문과 바이트 단위로 동형. `Content-Type: multipart`와 `boundary=`는 **삭제했다**(`Content-Type: multipart/form-data`는 모든 파일 업로드 POST의 표준 헤더다). 상한은 Medium(15점)이며 **단독으로는 거부선을 넘지 못한다** | Medium |
 | **jwt_attack** | `alg: none` 빈 알고리즘 우회, `kid` 경로 탐색 인젝션, 빈 서명 세그먼트, 빈 payload 세그먼트 | High |
-| **prototype_pollution** | `__proto__`/`constructor.prototype` 프로토타입 체인 폴루션, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` 속성 하이재킹 | High |
+| **prototype_pollution** | `__proto__`가 키이거나 대입 대상인 경우(`"__proto__":`, `[__proto__]`, `__proto__ = x`), `constructor.prototype`/`constructor[`, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__`, `hasOwnProperty[`; `약`: 맨 `__proto__`(`obj.__proto__`로 프로토타입을 읽는 것은 언어 자체의 표기다) | High |
 | **formula_injection** | 셀 선두의 `=cmd` + 파이프(명령 실행), `HYPERLINK()`/`IMPORTXML()`/`WEBSERVICE()`/`RTD()` 등 데이터 유출·로컬 실행 함수, DDE 셀 참조(`!A0`), `DDE(` 페이로드, `@SUM(` 등 구식 `@` 수식 —— CSV의 거친 층과 달리 실행·유출 가능한 페이로드만 잡는 정밀 층 | High |
 | **redos** | `(a+)+`/`(a*)*`처럼 수량자가 중첩된 형태, `(a+){2,}`, `\d`와 `\w`처럼 겹치는 문자 클래스 분기, `(x\|)` 빈 분기, 첫 분기가 단일 문자이고 접두사가 겹치는 `(a\|ab)*` —— 지수적 백트래킹을 일으키는 정규식 | Medium |
 
@@ -178,9 +219,31 @@ security-rust/
 
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
-| **path_traversal** | `../`/`..\\` 디렉터리 상향 이동, `%2e%2e` URL 인코딩 우회, `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` 프로토콜 래퍼, `%00` 널 바이트 종료 | Critical |
+| **path_traversal** | **다단계** 상향 이동 `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, `%2e%2e`/`..%2f`/`..%5c` URL 인코딩 우회, `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` 프로토콜 래퍼, `%00` 널 바이트 종료; `약`: 단일 단계 `../`/`..\`(모든 소스에 있는 상대 경로와 동형) | Critical |
 | **upload** | `<?php`/`<?=` PHP 태그, `<%@`/`<%=` ASP 태그, `eval($_`/`system($_`/`exec($_`/`passthru($_` 백도어 패턴, `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER` 슈퍼글로벌, `base64_decode()` 인코딩 우회 | Critical |
-| **data_leak** | 16자리 신용카드 PAN(Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, PEM 개인키 헤더 `-----BEGIN`, OpenAI/LLM API Key `sk-...`, DB 연결 문자열 `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, JWT 토큰 | Critical |
+| **data_leak** | 16자리 신용카드 PAN(Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, PEM 개인키 헤더 `-----BEGIN`, OpenAI/LLM API Key `sk-...`, DB 연결 문자열 `mongodb://`/`mysql://`/`postgresql://`/`redis://`(**`@`가 있는 userinfo 필수**: `mysql://root:secret@db`는 보고하고, `redis://shared-memory`, `postgres://localhost:5432/app` 같은 설정 관행은 **보고하지 않는다**), `jdbc:`(이 제약 없음), JWT 토큰 | Critical |
+
+---
+
+## 알려진 한계
+
+다음은 **알려져 있고 의도적으로 남긴** 경계이며, 고쳐야 할 결함이 아니다. 바꾸기 전에 근거를 읽어 보라 —— 모두 실측에서 나왔고, 누군가 더 조이려다 같은 벽에 부딪힌 것들이다.
+
+### `dns_rebinding`은 보고만 하고 막지 않는다
+
+판정 기준은 "`Host:` 헤더에 사설 주소가 나타난다"인데, 같은 형태가 k8s의 모든 pod 간 호출(`Host: 10.244.1.5:8080`), 모든 로컬 개발(`Host: localhost:8000`), 모든 Docker 컨테이너 네트워크 요청(`172.18.0.2`)이기도 하다. 진짜 rebinding이 보는 것은 "공인 도메인 이름 + 해석 결과가 내부를 향함"이고, 브라우저가 보내는 `Host`는 바로 그 공인 도메인 이름이다 —— **단일 문자열에서는 해석 이력이 보이지 않는다**. 그래서 이 탐지기가 재는 형태는 공격 형태와 겹치지 않으며 조일 방향이 없다. 따라서 탐지기 전체가 약한 단계뿐이고 일괄 `Low`를 보고하며, 아무리 많이 겹쳐도 단독으로는 거부선을 넘지 않는다. 방어는 해석 **이후**에 결과 IP를 대조하는 곳에 있고 문자열 계층에는 없다.
+
+### 이 라이브러리는 자기 소스·테스트·문서를 스캔할 수 없다
+
+시그니처 스캐너의 천장: 실측으로 이 저장소의 298개 파일 중 78개가 거부선을 넘는데, 그 모두가 **구조상** 공격 문자열을 담고 있다 —— 테스트 페이로드, 탐지기 소스 자체의 정규식 리터럴, 그리고 이 패턴들을 나열하는 README와 OWASP 표다. README는 `(a+)+`를 적었다고 해서 결함이 되지 않는다. 자기 산출물을 스캔하려면 먼저 이 코퍼스를 제외하거나 다른 판정 기준으로 바꿔야 한다.
+
+### `upload`는 `<%@` / `<?php`를 일괄 Critical로 보고한다
+
+이 탐지기의 계약은 "**이 blob은 서버 측에서 실행 가능한 코드다**" —— 출현 자체로 성립하므로 강약 계층을 두지 않는다. JSP 페이지와 JSP 웹셸의 선두 바이트는 바이트 단위로 같고(`<%@ page language="java" … %>`와 `<%@ page import="java.io.*" %>`는 같은 형태다), `<%@`/`<%=`를 강등하는 것은 웹셸을 거부선 아래로 떨어뜨리는 일 —— 다른 방식으로 탐지를 지우는 것과 같다. 대가는 **현재 서비스 중인** 페이지(업로드된 파일이 아니라)를 스캔해도 적중한다는 것인데, 그것은 입력 영역의 불일치다 —— 적중 메시지 `Malicious file upload detected`가 그 영역을 밝히고 있다.
+
+### `path_traversal`은 `(?:\.\./){2,}`를 Critical로 보고한다
+
+monorepo의 깊은 상대 경로(`from '../../../shared/domain'`)가 적중한다. 더 조이지 않은 이유는, 공격과 구분할 수 있는 유일한 제약이 대상 파일 이름 목록(`../etc/passwd` 류)인데 그것이 시스템 파일만 덮기 때문이다 —— 공격자는 LFI 대상을 바꾸면 빠져나간다.
 
 ---
 
@@ -211,8 +274,14 @@ security-rust/
 use security_rust::Scanner;
 
 let scanner = Scanner::default();
-let results = scanner.scan("<script>alert('xss')</script>");
-// [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+
+// 강한 신호: 형태 자체가 공격에서만 나올 수 있다 ⇒ 탐지기가 선언한 심각도로 보고
+let results = scanner.scan("<img src=x onerror=alert(1)>");
+// [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+// 약한 신호: 토큰이 출현했을 뿐 ⇒ 항상 Low, 단독으로는 거부선을 넘지 못한다("2단계 판정" 참고)
+let weak = scanner.scan("<script src=\"/app.js\"></script>");
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 ```
 
 위험 스코어링은 적중 목록을 하나의 등급으로 모아, 여러 저위험 신호가 조용히 무시되지 않게 한다:
@@ -288,7 +357,7 @@ let _ = throttle.record_failure(key, now);
 # 빌드
 cargo build --release
 
-# 테스트(494개: 유닛 365 + 통합 128 + 문서 테스트 1)
+# 테스트(580개: 유닛 431 + 통합 148 + 문서 테스트 1)
 cargo test
 
 # 엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)

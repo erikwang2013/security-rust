@@ -92,6 +92,45 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 | Detektor vs modul stateful | Dipisahkan | `Detector::detect(&str)` hanya menerima satu string, sehingga tidak dapat mengungkapkan input majemuk «token + fingerprint + lokasi + waktu»; karena itu `session` / `throttle` berdiri terpisah dari `Scanner` |
 | fail-closed vs fail-open | Autentikasi fail-closed, pembatasan laju fail-open | Meloloskan keputusan sesi sama dengan dibobol, jadi harus diblokir; sedangkan memblokir semua pengguna pada pembatasan laju adalah DoS terhadap diri sendiri, dan gerbang autentikasi utama tetap menahan — keputusannya diserahkan ke pemanggil |
 
+### Dua Tingkat: Sinyal Kuat dan Sinyal Lemah
+
+Detektor **tidak** melaporkan setiap temuan pada severity yang dideklarasikannya. 18 dari 32 detektor membagi polanya menjadi dua tingkat (static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber):
+
+| Tingkat | Kriteria | Severity yang dilaporkan | Satu temuan bisa melewati garis tolak? |
+|------|------|-----------|------------------|
+| **Kuat** | Bentuknya sendiri hanya mungkin berasal dari serangan | Tingkat yang dideklarasikan detektor | Bisa |
+| **Lemah** | Token itu hanya *muncul* — ada di mana-mana dalam konten normal | Selalu `Severity::Low` (5 poin) | **Tidak** |
+
+Kedua tingkat melewati detektor yang sama dan `attack_type` yang sama; hanya `severity` yang berbeda. Sinyal lemah **tetap terdeteksi** — tidak ada yang dibuang diam-diam: terlihat di `scan()` dan tetap terakumulasi di `assess()`.
+
+Konsekuensi langsungnya bagi pemanggil: **satu sinyal lemah bukan alasan untuk menolak.** Garis tolak pipeline rujukan ([`examples/waf.rs:166`](../../../examples/waf.rs)) adalah `risk.level >= RiskLevel::High` (40 poin), sedangkan satu sinyal lemah hanya 5 poin sehingga tidak masuk ke cabang itu. Untuk melihat serangan di balik sinyal lemah, lihat skor yang dihasilkan `assess()` setelah temuan dari beberapa detektor bertumpuk:
+
+```rust
+let scanner = Scanner::default();
+
+// Ketiganya sinyal lemah di tiga detektor berbeda — hanya tumpukannya yang naik tingkat
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+// a.results == 3, a.score == 15 (3 × Low) → RiskLevel::Medium
+// masih di bawah High; temuan lain di permintaan yang sama akan melewatinya
+```
+
+Pola yang diturunkan menjadi sinyal lemah adalah token yang «kemunculannya normal»:
+
+| Sinyal lemah | Mengapa tidak bisa menolak sendiri |
+|--------|-------------------|
+| `<script src=...>`, `<iframe>`, `<link>`, `expression(` | Ada di setiap halaman web |
+| `../` satu tingkat | Path relatif di setiap berkas sumber |
+| `-2`, `+1` di awal baris | Butir daftar Markdown, bilangan negatif dalam prosa |
+| `__proto__` telanjang (pembacaan prototipe) | JS apa pun yang menyentuh rantai prototipe |
+| `${env:}` / `${sys:}` | Sintaks konfigurasi log4j2 yang sah |
+| `X-Forwarded-Host`, `X-Original-URL` | Reverse proxy sendiri yang menambahkannya |
+| `Host: 10.244.1.5`, `Host: localhost` | Panggilan antar-pod k8s, pengembangan lokal |
+| `10.0.0.5`, `192.168.1.1`, `127.0.0.1` telanjang | `X-Forwarded-For`, `bind 127.0.0.1` |
+| URL relatif protokol `//evil.com` | Komentar sumber, tautan CDN di dokumentasi |
+| `information_schema` | Log galat PG, tutorial SQL |
+
+Tabel di atas hanyalah contoh. Kriterianya adalah **bentuk**, bukan nama berkas: untuk `../` yang sama, satu tingkat (`../x`) adalah sinyal lemah sedangkan banyak tingkat (`../../`) adalah sinyal kuat ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). Daftar lengkapnya ada di `WEAK_PATTERNS` tiap detektor dan penanda `lemah` di tabel-tabel berikutnya.
+
 ---
 
 ## Arsitektur Desain
@@ -139,47 +178,49 @@ Trait `Detector` adalah satu-satunya kontrak lapisan deteksi: `fn detect(&self, 
 Seluruh 32 detektor dirakit per kategori dan diaktifkan secara bawaan melalui `Scanner::default()` tanpa konfigurasi. Tabel di bawah mencantumkan cakupan masing-masing beserta tingkat severity-nya. Severity menggambarkan satu temuan; risiko agregat adalah yang dikembalikan oleh `Scanner::assess()`.
 *(Anotasi diagram dalam bahasa Mandarin; labelnya adalah nama API.)*
 
+Pola yang ditandai `lemah` di dalam tabel termasuk **sinyal lemah**: melaporkan `Severity::Low` (5 poin) dan tidak dapat melewati garis tolak sendirian (lihat bagian sebelumnya). Kolom «Severity» adalah **batas atas** yang dapat dicapai detektor itu; detektor yang memiliki penanda `lemah` tetap memiliki kedua tingkat, dan bagian atasnya tetap melaporkan tingkat yang dideklarasikan. Detektor yang seluruhnya lemah (`dns_rebinding`) memiliki batas atas `Low`.
+
 ### Serangan Injeksi (11 detektor)
 
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
-| **xss** | `<script>`, penangan peristiwa seperti `onerror=`, protokol semu `javascript:`, tag `<svg>`/`<iframe>`, CSS `expression()`, `eval()`, `document.cookie` | Critical |
-| **sql_injection** | `UNION SELECT`, injeksi penundaan `sleep()`/`benchmark()`/`pg_sleep()`, enumerasi `information_schema`, prosedur tersimpan `exec sp_`/`xp_`, pola boolean blind `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE` | Critical |
-| **command_injection** | Perintah backtick, subperintah `$()`, eksekusi berantai melalui pipe, reverse shell `/dev/tcp`, fungsi PHP `passthru()`/`shell_exec()`/`system()`, pemanggilan `cmd.exe`/`powershell` | Critical |
+| **xss** | Seluruh tabel penangan peristiwa seperti `onerror=`/`onload=`, protokol semu `javascript:`/`vbscript:` (hanya scheme yang langsung diikuti non-spasi); `lemah`: tag `<script src=...>`/`<iframe>`/`<embed>`/`<object>`/`<link>`, CSS `expression(` | Critical |
+| **sql_injection** | `UNION SELECT`, injeksi penundaan `sleep()`/`benchmark()`/`pg_sleep()` (hanya pada posisi pernyataan), prosedur tersimpan `exec sp_`/`xp_`, pola boolean blind `' OR '1'='1`, `LOAD_FILE()`/`INTO OUTFILE`, `DROP TABLE`/`INSERT INTO`, pemisahan komentar `UN/**/ION`; `lemah`: kemunculan kata `information_schema` | Critical |
+| **command_injection** | Reverse shell `/dev/tcp`, bentuk pemanggilan `passthru()`/`shell_exec()`/`system("…")`/`popen()`/`pcntl_exec()`, bentuk pemanggilan `powershell -Command`/`cmd.exe /c`; `lemah`: span backtick, subperintah `$()`, eksekusi berantai pipe/`\|\|`/`&&`, `exec(`, `>/dev/null`, pola reader+lokasi seperti `cat /etc/passwd`, kata telanjang `cmd.exe`/`powershell` | Critical |
 | **nosql_injection** | Operator MongoDB `$ne`/`$gt`/`$regex`/`$where`, injeksi `$or`, bypass autentikasi `{"$gt": ""}` | Critical |
 | **ldap_injection** | Operator filter `(&` `(\|` `(!`, enumerasi atribut `*(cn=`, injeksi `objectClass`/`uid` | High |
 | **xpath_injection** | Bypass boolean `' or '1'='1`, injeksi fungsi `' or true()`, traversal simpul `'] \| '` | High |
-| **jndi_injection** | `${jndi:ldap://`, obfuscation `${lower:j}`, obfuscation `${upper:j}`, obfuscasi string kosong `${::-j}`, lookup variabel lingkungan `${env:}`, properti sistem `${sys:}` | Critical |
-| **ssi_injection** | Eksekusi perintah `<!--#exec cmd=`, inklusi file `<!--#include file=`, output variabel `<!--#echo var=`, info file `<!--#fsize`/`<!--#flastmod` | High |
-| **graphql_injection** | Query introspeksi `__schema`/`__type`, DoS bersarang dalam (≥5 lapis) | Medium |
-| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **evaluasi di dalam delimiter** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`), ERB `<%=` `<%@`, Velocity `#set()`, rantai escape Python `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`; delimiter saja bukan sinyal, placeholder biasa seperti `${x}` tidak dilaporkan | Critical |
+| **jndi_injection** | Badan lookup `${jndi:`, pelipatan huruf `${lower:j}`/`${upper:j}`, pelipatan string kosong `${::-j}` (ada hanya untuk mengaburkan `jndi`); `lemah`: sintaks lookup yang sah `${env:}`/`${sys:}`/`${java:}` | Critical |
+| **ssi_injection** | Eksekusi perintah `<!--#exec cmd=`, inklusi `<!--#include file=` dengan path absolut atau `..`, ekspor variabel lingkungan `<!--#printenv`; `lemah`: output variabel `<!--#echo var=`, info file `<!--#fsize`/`<!--#flastmod`, `<!--#config`, inklusi rutin seperti `<!--#include file="header.html"` | High |
+| **graphql_injection** | Query introspeksi dalam bentuk kuery, `__schema {`/`__type {` (menyebut nama bidang dalam prosa tidak dilaporkan); `lemah`: `__typename` (Apollo/Relay menambahkannya ke setiap kuery), kurung kurawal bersarang ≥5 lapis | Medium |
+| **ssti** | Jinja2 `{{ }}` / FreeMarker `${ }` — **evaluasi di dalam delimiter** (`{{7*7}}`, `${7*7}`, `{{config`, `${T(java.lang.Runtime)}`, `${@Type@method}`), LFI template melalui `{% include '/…'` / `..`, rantai escape di dalam delimiter `__mro__`/`__subclasses__()`/`__globals__`/`__builtins__`/`__class__`/`__dict__`, FreeMarker `?new(`; `lemah`: direktif template telanjang `{% %}`/`<%=`/`<%@`/`#set(`, atribut magis telanjang; delimiter saja bukan sinyal, placeholder biasa seperti `${x}` tidak dilaporkan | Critical |
 | **format_string** | Spesifier `%n` penulis memori (`%n`/`%1$n`/`%hn`/`%ln`), konversi lebar besar `%123456d`, pengulangan rapat `%x`/`%p`/`%s` untuk kebocoran memori | Medium |
 
 ### Serangan Protokol & Permintaan (11 detektor)
 
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
-| **ssrf** | Metadata cloud `169.254.169.254`, IP intranet RFC1918 (10.x, 172.16-31.x, 192.168.x), loopback `127.x`, IPv6 loopback `::1`, `0.0.0.0`, protokol berbahaya `gopher://`/`dict://`/`ftp://`/`file://` | Critical |
+| **ssrf** | Metadata cloud `169.254.169.254` dan `metadata.google.internal` (tidak menuntut konteks URL), IP intranet di **posisi authority URL** (setelah `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, protokol berbahaya `gopher://`/`dict://`/`ftp://user@`/`file:///`; `lemah`: literal intranet yang sama di **posisi non-URL** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` identik byte per byte) | Critical |
 | **xxe** | Deklarasi entitas `<!ENTITY`, referensi eksternal `SYSTEM`/`PUBLIC`, entitas parameter `%`, deklarasi DTD `<!DOCTYPE` | Critical |
-| **header_injection** | CRLF terenkode URL `%0d%0a`, injeksi CRLF mentah `\r\n` | High |
-| **host_header** | Injeksi beberapa Host header, poisoning `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL`, Host dengan CRLF | High |
+| **header_injection** | `\r\n` sebelum header khusus respons: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, atau `%0d` bersamaan dengan `%0a` (termasuk urutan terbalik `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` adalah header **permintaan**, identik byte per byte dengan header pesan yang normal, sehingga bukan lagi sinyal (bentuk terenkode `%0d%0aContent-Length:` tetap ditangkap oleh `%0d`+`%0a`) | High |
+| **host_header** | **Dua** header `Host:` (RFC 7230 §5.4 mewajibkan 400, dua lapis parser berbeda pendapat); `lemah`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — proxy sendiri juga menambahkannya, identik byte per byte dengan pemalsuan klien (`X-Forwarded-For`/`X-Forwarded-Proto` tidak dilaporkan) | High |
 | **request_smuggling** | Header `Transfer-Encoding` ganda, penyelundupan `Content-Length: 0`, obfuscation terminasi chunked `\r\n0\r\n` | High |
-| **open_redirect** | URL relatif protokol `//evil.com`, lompatan protokol semu `javascript:`/`data:text/html` | Medium |
-| **cors** | `Access-Control-Allow-Origin: null`, `Origin: null` (indikator kanonis untuk iframe sandbox dan CSWSH), dan `Access-Control-Allow-Origin: *` **bersamaan dengan** `Access-Control-Allow-Credentials: true`. Masing-masing sendirian normal untuk API publik dan aset statis dan tidak dilaporkan | Medium |
+| **open_redirect** | Lompatan protokol semu `javascript:`/`data:text/html`/`data:text/plain` (menuntut isi setelah scheme); `lemah`: URL relatif protokol `//evil.com` — identik dengan tautan CDN di komentar sumber dan dokumentasi | Medium |
+| **cors** | `Access-Control-Allow-Origin: null`, dan `Access-Control-Allow-Origin: *` **bersamaan dengan** `Access-Control-Allow-Credentials: true`; `lemah`: `Origin: null` di sisi permintaan (iframe sandbox, URL `data:`, dan berkas lokal memiliki origin `null`; baru berlaku jika server memantulkannya dengan `ACAO: null`). Masing-masing sendirian normal untuk API publik dan aset statis dan tidak dilaporkan | Medium |
 | **websocket** | `Origin: null` bersamaan dengan upgrade WebSocket (CSWSH), `ws://` menuju alamat loopback/pribadi/link-local (termasuk endpoint metadata cloud `169.254.169.254`) | High |
-| **dns_rebinding** | Host header berupa IP intranet `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `::1`, `0.0.0.0` | High |
+| **dns_rebinding** | Host header berupa IP intranet `127.x`/`10.x`/`192.168.x`/`172.16-31.x`, `localhost`, `[::1]`, `0.0.0.0`. **Seluruh detektor hanya memiliki tingkat lemah**: selalu melaporkan `Low` (lihat «Batas yang Diketahui») | Low |
 | **log4shell** | Obfuskasi `${lower:j}`/`${upper:j}`, obfuskasi string kosong `${::-j}`, lookup `jndi` bersarang, dan bentuk terenkode URL `%24%7b...%3a...%7d...ndi` | Critical |
-| **hpp** | Pengulangan key parameter yang sama (`a=1&a=2`), serta campuran `&` dan `;` untuk key yang sama — mengecualikan `;jsessionid=` untuk parameter matriks kontainer Java | Medium |
+| **hpp** | Campuran pemisah `&` dan `;` (`?a=1&b=2;c=3`, dua lapis parser menghasilkan jumlah parameter berbeda); `lemah`: pengulangan key yang sama (`?id=1&id=2`) — identik byte per byte dengan parameter multinilai yang sah seperti `?tag=rust&tag=web`; `;jsessionid=` sebagai parameter matriks adalah pemisah path sehingga dikecualikan | Medium |
 
 ### Serangan Data & Serialisasi (7 detektor)
 
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
-| **deserialization** | Objek serialisasi PHP `O:angka:`/`C:angka:`, array `a:angka:{`, pemanggilan `unserialize()`, metode magic seperti `__wakeup`/`__destruct`/`__toString` | Critical |
-| **csv_injection** | Karakter formula di awal sel `=`/`+`/`-`/`@` (tab dan carriage return adalah **pemisah**, bukan awal formula), `=` tepat setelah pemisah `,`/`;`/`\t`, DDE dynamic data exchange, pipe perintah `cmd\|`, fungsi `@SUM()` | Medium |
-| **mail_header** | Injeksi salinan tersembunyi `Bcc:`/`Cc:`, beberapa pengirim `From:`, injeksi header MIME `MIME-Version:`/`Content-Type: multipart`, manipulasi `boundary=` | Medium |
+| **deserialization** | Objek serialisasi PHP `O:angka:`/`C:angka:`, array `a:angka:{`, pemanggilan `unserialize()`, metode magic dalam **bentuk pemanggilan** (`__wakeup(`/`__destruct(`/`__construct(`/`__toString(`/`__get(`/`__set(`/`__call(`); `lemah`: nama metode magic telanjang (dokumentasi yang membahasnya juga terkena) | Critical |
+| **csv_injection** | `=` tepat setelah pemisah `,`/`;`/`\t` yang langsung diikuti non-spasi (formula di sel kedua baris TSV/CSV), `DDE` di awal baris, `cmd\|` di awal baris, `@SUM(` di awal baris; `lemah`: `=`/`+`/`-` di awal baris yang diikuti bukan spasi dan bukan simbol sefamili (`- item` butir daftar, `---` garis pemisah, `++i`, `= 5` tidak terkena). `@` dikeluarkan seluruhnya dari tingkat kasar (`@media`/`@import` ada di mana-mana dalam stylesheet) — hanya `@SUM(` yang tersisa. Tab dan carriage return adalah **pemisah**, bukan awal formula | Medium |
+| **mail_header** | Dua header `From:` yang bersebelahan, `MIME-Version:` di awal baris (nama yang tidak ada di tabel field HTTP); `lemah`: `Cc:`/`Bcc:` di awal baris — identik byte per byte dengan surel yang diteruskan dan badan pesan yang disantap sistem tiket. `Content-Type: multipart` dan `boundary=` **dihapus** (`Content-Type: multipart/form-data` adalah header standar setiap POST unggah berkas). Batas atasnya Medium (15 poin): **tidak dapat melewati garis tolak sendirian** | Medium |
 | **jwt_attack** | Bypass algoritma kosong `alg: none`, injeksi path traversal `kid`, segmen tanda tangan kosong, segmen payload kosong | High |
-| **prototype_pollution** | Polusi rantai prototipe `__proto__`/`constructor.prototype`, pembajakan properti `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__` | High |
+| **prototype_pollution** | `__proto__` sebagai key atau sasaran penetapan (`"__proto__":`, `[__proto__]`, `__proto__ = x`), `constructor.prototype`/`constructor[`, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__`, `hasOwnProperty[`; `lemah`: `__proto__` telanjang (`obj.__proto__` memang cara bahasa ini membaca prototipe) | High |
 | **formula_injection** | Fungsi spreadsheet berbahaya `HYPERLINK()`/`IMPORTXML()`/`IMPORTDATA()`/`IMPORTRANGE()`/`WEBSERVICE()`/`RTD()`/`EXEC()`, eksfiltrasi data berbasis formula melalui pipe + referensi sel, `DDE(`, dan fungsi `@` | High |
 | **redos** | Kuantifier bersarang `(x+)+`/`(x*)*`/`(x{2,})+`, alternasi berprefiks sama, pengulangan alternasi kelas karakter | Medium |
 
@@ -187,9 +228,31 @@ Seluruh 32 detektor dirakit per kategori dan diaktifkan secara bawaan melalui `S
 
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
-| **path_traversal** | Traversal direktori `../`/`..\\`, bypass terenkode URL `%2e%2e`, pembungkus protokol `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncation null byte `%00` | Critical |
+| **path_traversal** | Traversal **banyak tingkat** `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, bypass terenkode URL `%2e%2e`/`..%2f`/`..%5c`, pembungkus protokol `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncation null byte `%00`; `lemah`: `../`/`..\` satu tingkat (identik dengan path relatif di sumber atau dokumentasi) | Critical |
 | **upload** | Tag PHP `<?php`/`<?=`, tag ASP `<%@`/`<%=`, pola backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobal `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, bypass enkode `base64_decode()` | Critical |
-| **data_leak** | PAN kartu kredit 16 digit (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, header kunci privat PEM `-----BEGIN`, API Key OpenAI/LLM `sk-...`, string koneksi database `mongodb://`/`mysql://`/`postgresql://`/`redis://`/`jdbc:`, JWT Token | Critical |
+| **data_leak** | PAN kartu kredit 16 digit (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, header kunci privat PEM `-----BEGIN`, API Key OpenAI/LLM `sk-...`, string koneksi database `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**wajib memuat userinfo `@`**: `mysql://root:secret@db` dilaporkan, sedangkan `redis://shared-memory` dan `postgres://localhost:5432/app` adalah konfigurasi biasa dan **tidak dilaporkan**), `jdbc:` (tanpa batasan itu), JWT Token | Critical |
+
+---
+
+## Batas yang Diketahui
+
+Berikut adalah batas yang **diketahui dan sengaja dipertahankan**, bukan cacat yang menunggu perbaikan. Setiap butir punya bukti pengukuran, dan setiap butir sudah pernah menggagalkan upaya memperketatnya.
+
+### `dns_rebinding` melaporkan, tidak memblokir
+
+Kriterianya adalah «alamat internal muncul di `Host:`» — dan bentuk yang sama juga merupakan setiap panggilan antar-pod k8s (`Host: 10.244.1.5:8080`), setiap pengembangan lokal (`Host: localhost:8000`), dan setiap permintaan jaringan kontainer Docker (`172.18.0.2`). Rebinding yang sebenarnya melihat «nama domain publik + hasil resolusi yang mengarah ke dalam», sedangkan `Host` yang dikirim peramban justru nama publik itu — **satu string tidak membawa riwayat resolusi**, sehingga bentuk yang diuji detektor ini tidak beririsan dengan bentuk serangan, dan tidak ada arah pengetatan. Karena itu seluruh detektor hanya berisi tingkat lemah dan selalu melaporkan `Low`; sebanyak apa pun tumpukannya tidak akan melewati garis tolak sendirian. Perlindungan berada **setelah** resolusi, membandingkan IP hasilnya, bukan di lapisan string.
+
+### Pustaka ini tidak bisa memindai sumber, tes, dan dokumentasinya sendiri
+
+Langit-langit pemindai tanda tangan: terukur pada repositori ini, 78 dari 298 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
+
+### `upload` selalu melaporkan `<%@` / `<?php` sebagai Critical
+
+Kontrak detektor ini adalah «**blob ini adalah kode yang dapat dieksekusi di sisi server**» — kemunculannya sudah cukup, jadi tidak ada pemisahan tingkat. Halaman JSP dan webshell JSP berbagi byte pembuka yang identik (`<%@ page language="java" … %>` dan `<%@ page import="java.io.*" %>` adalah bentuk yang sama); menurunkan `<%@`/`<%=` berarti menjatuhkan webshell ke bawah garis tolak — itu menghapus deteksi dengan cara lain. Harganya, memindai halaman yang **sedang disajikan** (bukan berkas yang diunggah) juga terkena; itu ketidaksesuaian ranah input — pesan temuan `Malicious file upload detected` sudah menyebut ranahnya.
+
+### `path_traversal` melaporkan `(?:\.\./){2,}` sebagai Critical
+
+Path relatif yang dalam di monorepo (`from '../../../shared/domain'`) akan terkena. Tidak diperketat lebih lanjut karena satu-satunya batasan yang memisahkannya dari serangan adalah daftar nama berkas target (`../etc/passwd` dan sejenisnya), yang hanya mencakup berkas sistem — penyerang tinggal mengganti target LFI.
 
 ---
 
@@ -221,8 +284,14 @@ Siap pakai tanpa konfigurasi:
 use security_rust::Scanner;
 
 let scanner = Scanner::default();
-let results = scanner.scan("<script>alert('xss')</script>");
-// [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+
+// Sinyal kuat: bentuknya sendiri hanya mungkin berasal dari serangan ⇒ severity yang dideklarasikan detektor
+let results = scanner.scan("<img src=x onerror=alert(1)>");
+// [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+// Sinyal lemah: token hanya muncul ⇒ selalu Low, tidak melewati garis tolak sendirian (lihat «Dua Tingkat»)
+let weak = scanner.scan("<script src=\"/app.js\"></script>");
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 ```
 
 Penilaian risiko merangkum daftar temuan menjadi satu tingkat, agar beberapa sinyal berisiko rendah tidak diabaikan diam-diam:
@@ -299,7 +368,7 @@ let _ = throttle.record_failure(key, now);
 # Build
 cargo build --release
 
-# Tes (494: 365 unit + 128 integrasi + 1 doc test)
+# Tes (580: 431 unit + 148 integrasi + 1 doc test)
 cargo test
 
 # Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)

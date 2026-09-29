@@ -37,6 +37,35 @@ pub struct DetectionResult {
 }
 ```
 
+## Two Tiers: Strong and Weak Signals
+
+18 of the 32 detectors split their patterns into two tiers (each detector's own strong/weak pattern sets — most keep them in statics, but where the strong branch is conditional, as in `hpp` and `cors`, they are built inline). The `DetectionResult` shape is unchanged — what changes is the value of `severity`:
+
+| Tier | Test | `severity` | Can a single hit cross the reject line? |
+|------|------|-----------|----------------------------------------|
+| **Strong** | The shape itself can only come from an attack | The detector's declared level | Yes |
+| **Weak** | The token merely *appears* — it is everywhere in ordinary content | Always `Severity::Low` (5 points) | **No** |
+
+Same detector, same `attack_type`, only `severity` differs. `detect()` tries the strong tier first and falls back to weak, so **each detector returns at most one result**. Weak signals are still detected — nothing is silently dropped.
+
+`DetectionResult` carries no tier field — to tell the two apart, check `severity == Severity::Low`, which is the only source that ever reports `Low`. The reference pipeline rejects at 40 points (`risk.level >= RiskLevel::High`, [`examples/waf.rs:166`](../../../examples/waf.rs)); one weak signal is worth 5 and cannot reach that branch.
+
+Seeing the attack behind weak signals is what `assess()` is for:
+
+```rust
+let scanner = Scanner::default();
+
+// Three weak signals from three different detectors — the stack only reaches Medium
+let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__");
+assert_eq!(a.results, 3);
+assert_eq!(a.score, 15);
+assert_eq!(a.level, RiskLevel::Medium);
+```
+
+Patterns demoted to weak include `<script src=...>`, a single-level `../`, line-leading `-2`, a bare `__proto__`, `${env:}`, `X-Forwarded-Host`, `Host: localhost`, a bare `10.0.0.5`, `//evil.com`, and `information_schema` (the full list is each detector's weak tier).
+
+The test is the **shape**, not the file name: for the same `../`, a single level (`../x`) reports `Low` and multiple levels (`../../`) report `Critical` ([`src/file/path_traversal.rs`](../../../src/file/path_traversal.rs)). Per-detector ceilings are in the [README](./README.md) feature tables.
+
 ## Scanner
 
 ### Installation
@@ -55,15 +84,19 @@ fn main() {
     // 零配置：装配全部 32 个检测器
     let scanner = Scanner::default();
 
-    // 扫描输入，返回所有检测到的攻击
-    let results = scanner.scan("<script>alert('xss')</script>");
+    // 扫描输入，返回所有检测到的攻击（每个检测器最多一条）
+    let results = scanner.scan("<img src=x onerror=alert(1)>");
 
     for r in &results {
         println!("[{}] {} — offset: {}, pattern: {}",
             r.severity, r.message, r.offset, r.matched_pattern);
     }
     // 输出:
-    // [CRITICAL] XSS cross-site scripting detected — offset: 0, pattern: <script>
+    // [CRITICAL] XSS cross-site scripting detected — offset: 11, pattern: onerror=
+
+    // A weak signal uses the same detector and the same attack_type, reporting Low
+    let weak = scanner.scan("<script src=\"/app.js\"></script>");
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
 }
 ```
 
@@ -100,7 +133,17 @@ let r = &results[0];
 println!("{}", r.severity);  // CRITICAL | HIGH | MEDIUM | LOW
 ```
 
-The other state labels implement `Display` too and print in uppercase: `Decision` (`ALLOW` / `CHALLENGE` / `BLOCK`), `SessionThreat` (e.g. `impossible travel (11205 km/h)`), `AttackCategory` (lowercase, e.g. `injection`), `ThrottleDecision` (`ALLOW` / `BANNED` / `UNAVAILABLE`), and `ThrottleOutcome` (`ALLOW` / `BANNED`).
+### Status Label `Display`
+
+Besides `Severity` / `RiskLevel`, the following enums implement `Display` too, so they can be interpolated into logs directly instead of printing the `Debug` shape:
+
+| Type | Output |
+|------|--------|
+| `AttackCategory` | `injection` / `protocol` / `data` / `file` |
+| `Decision` | `ALLOW` / `CHALLENGE` / `BLOCK` |
+| `SessionThreat` | Human-readable description (`token expired`, `fingerprint mismatch` …); `ImpossibleTravel { kmh }` carries the value: `impossible travel (11205 km/h)` |
+| `ThrottleDecision` | `ALLOW` / `BANNED` / `UNAVAILABLE` |
+| `ThrottleOutcome` | `ALLOW` / `BANNED` |
 
 ```rust
 println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
@@ -120,9 +163,9 @@ use security_rust::{RiskLevel, Scanner};
 
 let scanner = Scanner::default();
 let a = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
-// a.level   >= RiskLevel::High   — several medium hits stacked into High
-// a.results >= 3                 — number of hits aggregated
-// a.score                        — raw weighted points
+// a.level   == RiskLevel::Critical — the path-traversal hit is Critical and short-circuits
+// a.results == 4                   — number of hits aggregated
+// a.score   == 150                 — raw weighted points
 
 // A clean input yields RiskLevel::None with score 0.
 let clean = scanner.assess("hello world 123");
@@ -138,6 +181,8 @@ Weights are fixed and live on the scoring side: `Critical` 100, `High` 40, `Medi
 - otherwise the weighted total is banded: `1..=14` → `Low`, `15..=39` → `Medium`, `40..=99` → `High`, `>= 100` → `Critical`
 
 So 3 × Low (15) reaches `Medium` and 8 × Low (40) reaches `High` — stacked low-severity signals escalate rather than being dismissed individually.
+
+**This is the only path by which a weak signal can escalate.** One weak signal is worth 5 points and can never reach the 40-point reject line alone; only several of them, from different detectors, stack up. Feeding every dimension of a request into the same `Scanner` therefore surfaces far more than scanning a single field does — and conversely, scanning one short field needs no weak-signal handling at all.
 
 The lower-level pieces are also public, under `security_rust::score`: `score(&[DetectionResult]) -> RiskLevel`, `total(&[DetectionResult]) -> u32`, and `assess(&[DetectionResult]) -> RiskAssessment`. `severity_rank` and the weight table stay private.
 
@@ -207,6 +252,10 @@ impl<S: SessionStore> SessionGuard<S> {
         ctx: &RequestContext,
         now: u64,
     ) -> Result<(), SessionError>;
+
+    /// Drop expired sessions and the login history of dormant subjects.
+    /// Returns the number of **sessions** removed, not the logins dropped.
+    pub fn purge_expired(&self, now: u64) -> Result<usize, StoreError>;
 }
 ```
 
@@ -275,6 +324,8 @@ assert_eq!(verdict.decision, Decision::Block);
 **Activity is refreshed only on `Allow`.** A blocked request does not extend the session's lifetime.
 
 **Fingerprint and signature comparison is constant-time.** `==` on byte strings returns at the first differing byte, leaking how many leading bytes were guessed correctly. Length mismatch returns `false` immediately — lengths leak, but they are not sensitive.
+
+**The number of subjects is unbounded.** `MemoryStore` caps each subject's login history at `MAX_LOGINS_PER_SUBJECT` = 10, but nothing caps how many subjects exist (`Mutex<HashMap>`, no background thread, entries only ever grow). Long-running processes should call `purge_expired` on a timer, at an interval on the order of `ttl_secs`: it drops sessions whose `expires_at <= now`, and the entire login history of any subject with no login point newer than `now - LOGIN_HISTORY_KEEP_SECS` (7 days). **The return value counts sessions only**, never the recycled login history. Reclaiming a dormant subject's history costs that subject one skipped foreign-location / impossible-travel check on the next login (after which the history is rebuilt) — a false negative, not a false positive.
 
 ### SessionStore
 
@@ -389,6 +440,93 @@ pub trait ThrottleStore: Send + Sync {
 ```
 
 `MemoryThrottleStore` is the in-process implementation. `check` compares `until` against `now` itself rather than trusting the store to filter: a backend that returns the raw value (common in third-party Redis implementations) would otherwise lock a key forever. As with `SessionStore`, implement this trait over Redis for multi-instance deployments.
+
+## Score
+
+Aggregating individual low-severity signals into something observable: several low-severity hits stacked together can escalate, which leaves a knob for tuning WAF false positives.
+
+### Core Types
+
+| Type | Description |
+|------|-------------|
+| `RiskLevel` | `None` < `Low` < `Medium` < `High` < `Critical` (declaration order is strength order; `Ord` is derived) |
+| `RiskAssessment` | `level` + `score` (raw points) + `results` (number of hits aggregated) |
+
+```rust
+pub enum RiskLevel { None, Low, Medium, High, Critical }
+
+pub struct RiskAssessment {
+    pub level: RiskLevel,
+    pub score: u32,
+    pub results: usize,
+}
+
+pub fn assess(results: &[DetectionResult]) -> RiskAssessment;
+pub fn score(results: &[DetectionResult]) -> RiskLevel;
+pub fn total(results: &[DetectionResult]) -> u32;
+```
+
+### Scoring Rules
+
+| `Severity` | Weight |
+|------------|--------|
+| Critical | 100 |
+| High | 40 |
+| Medium | 15 |
+| Low | 5 |
+
+- empty result set ⇒ `None`
+- any `Severity::Critical` ⇒ `Critical` directly (short-circuits; no accumulation needed)
+- otherwise banded by the total: `1..=14` → Low, `15..=39` → Medium, `40..=99` → High, `≥100` → Critical
+- so 3 × Low (15 points) escalates to Medium, and 8 × Low (40 points) escalates to High
+
+**This is the only path by which a weak signal can escalate** — one weak signal is worth 5 points and can never cross the 40-point reject line on its own; only several of them, from different detectors, stacked together will. Feeding every dimension of a request into the same `Scanner` therefore surfaces far more of the attack behind weak signals than scanning a single field does; conversely, scanning one short field needs no weak-signal handling at all.
+
+Note that `Severity` itself has **no** `Ord` (its declaration order is Critical → Low, descending, so deriving `Ord` would make `max()` silently pick the lightest hit); the weight table lives on the scoring side. `RiskLevel` is the opposite: declaration order is strength order.
+
+### Minimal Example
+
+```rust
+use security_rust::{RiskLevel, Scanner};
+
+let scanner = Scanner::default();
+
+// A clean input
+assert_eq!(scanner.assess("hello world 123").level, RiskLevel::None);
+
+// Several stacked hits: level, raw points, and hit count in one call
+let a = scanner.assess("=cmd|' /C calc'!A0 `cat /etc/passwd` ../../../etc/passwd");
+println!("{} score={} results={}", a.level, a.score, a.results);
+// CRITICAL score=150 results=4
+
+// Aggregate existing scan results directly (assess is imported from the crate root;
+// score / total go through the module path security_rust::score::{score, total})
+// Use a strong-signal payload: a tag merely *existing* is a weak signal (Low, 5 points)
+// and cannot reach Critical on its own.
+let results = scanner.scan("<img src=x onerror=alert(1)>");
+let a = security_rust::assess(&results);
+assert_eq!(a.level, RiskLevel::Critical);
+```
+
+## Known Limits
+
+The following are **known, deliberately retained** boundaries, not defects awaiting a fix. Each one has measured evidence behind it, and each has already defeated an attempt to tighten it.
+
+### `dns_rebinding` reports, it does not block
+
+Its test is "an internal address appears in `Host:`" — and that same shape is every k8s pod-to-pod call (`Host: 10.244.1.5:8080`), every local development request (`Host: localhost:8000`), and every Docker container-network call (`172.18.0.2`). Real rebinding is "a public domain name + a resolution result pointing inward", and the `Host` the browser sends is precisely that public name — **a single string carries no resolution history**, so the shape this detector tests does not overlap the attack shape, and no tightening exists. The detector is weak in full and always reports `Low`; no amount of stacking makes it cross the reject line by itself. Protection belongs after resolution, comparing the resulting IP — not in the string layer.
+
+### This crate cannot scan its own source, tests, or docs
+
+The signature scanner's ceiling: measured over this repository, 78 of 298 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
+
+### `upload` reports `<%@` / `<?php` as Critical wherever they appear
+
+The detector's contract is "**this blob is server-side executable code**" — presence alone establishes it, so there is no tier split. A JSP page and a JSP webshell share their preamble byte for byte (`<%@ page language="java" … %>` and `<%@ page import="java.io.*" %>` are the same shape); demoting `<%@`/`<%=` would drop webshell detection below the reject line — deletion by another name. The cost is that scanning a page **currently being served** (rather than an uploaded file) also hits; that is an input-domain mismatch.
+
+### `path_traversal` reports `(?:\.\./){2,}` as Critical
+
+A deep relative path in a monorepo (`from '../../../shared/domain'`) matches. It is not tightened further because the only constraint separating it from an attack is a target-name list (`../etc/passwd` and friends), which covers system files only — an attacker simply picks a different LFI target.
 
 ## Performance
 
