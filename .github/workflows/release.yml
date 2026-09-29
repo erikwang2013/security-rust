@@ -6,7 +6,10 @@ name: Auto Release
 #
 # 创建了新 tag 时，再用同一个版本号发一次 crates.io。
 # 需要仓库 secret `CARGO_REGISTRY_TOKEN`（https://crates.io/settings/tokens）；
-# 未配置则该步骤只告警、不失败 —— 手动 `cargo publish` 仍是有效路径。
+# 未配置则该步骤直接失败 —— 此时 tag 与 release 已创建，属于必须人工补发的状态，
+# 不能报绿（重跑本 workflow 也救不回来：tag 已存在，publish job 会被 created=false 跳过）。
+#
+# 发布前必须先过 `test` job（测试 / clippy / 声明的最低 Rust 版本）。
 on:
   push:
     branches: [main]
@@ -15,6 +18,34 @@ permissions:
   contents: write
 
 jobs:
+  # 发布前的唯一验证关卡。此前没有任何 CI 跑过测试，版本号一改就直接 tag + publish。
+  test:
+    runs-on: ubuntu-latest
+    # 只读即可（最小权限）
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure recent stable toolchain
+        run: rustup update stable --no-self-update && rustup default stable && rustup component add clippy
+
+      - name: Test
+        run: cargo test
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # 用 Cargo.toml 里声明的 rust-version 再建一次，确保「声明的 MSRV」与「源码
+      # 实际用到的特性」一致 —— 曾经声明 1.87，而源码用了 1.88 才稳定的 let-chains，
+      # 导致 1.87 的用户被 cargo 主动选中本 crate 后编译失败。
+      - name: Check declared MSRV
+        run: |
+          MSRV=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "声明的 MSRV：${MSRV}"
+          rustup toolchain install "${MSRV}" --profile minimal --no-self-update
+          cargo "+${MSRV}" check --all-targets
+
   release:
     runs-on: ubuntu-latest
     outputs:
@@ -49,7 +80,9 @@ jobs:
           echo "created=true" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: release
+    # 测试没过就不发布。tag/release 由上面的 job 创建（保持原有逻辑不动），
+    # 但 crates.io 这一步被 test 卡住。
+    needs: [release, test]
     # 只在本次真的创建了新 tag 时发布，避免每次 push 都重试上传
     if: needs.release.outputs.created == 'true'
     runs-on: ubuntu-latest
@@ -60,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # 用 runner 自带的 rustup 装 stable，不引入第三方 action。
-      # 本 crate 是 edition 2024（rust-version 1.87），必须确保工具链够新。
+      # 本 crate 是 edition 2024（rust-version 1.88），必须确保工具链够新。
       - name: Ensure recent stable toolchain
         run: rustup update stable --no-self-update && rustup default stable
 
@@ -70,8 +103,8 @@ jobs:
           TAG: ${{ needs.release.outputs.tag }}
         run: |
           if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "::warning::未配置 CARGO_REGISTRY_TOKEN，跳过 crates.io 发布；可本地 cargo publish"
-            exit 0
+            echo "::error::未配置 CARGO_REGISTRY_TOKEN —— tag ${TAG} 与 GitHub release 已创建，但未发布到 crates.io。请补上 secret 后手动 cargo publish（重跑本 workflow 无效：tag 已存在，publish job 会被 created=false 跳过）。"
+            exit 1
           fi
           echo "发布 ${TAG} 到 crates.io"
           cargo publish
