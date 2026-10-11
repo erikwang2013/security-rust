@@ -28,6 +28,13 @@ pub struct LoginPoint {
     pub at: u64,
 }
 
+/// 会话存储后端。
+///
+/// guard **按值**持有 store（`SessionGuard<S>` 的字段就是 `S`），而本 trait
+/// 没有为 `Arc<T>` 提供 blanket impl —— 所以 `Arc<MemoryStore>` 不是
+/// `SessionStore`，两个 guard 想共享同一份存储得包一层 newtype 并转发全部方法。
+/// 多线程场景不必如此：`SessionGuard<S>` 本身是 `Send + Sync`，共享一个
+/// `Arc<SessionGuard<MemoryStore>>`（见 `examples/axum_middleware.rs`）即可。
 pub trait SessionStore: Send + Sync {
     fn put(&self, rec: SessionRecord) -> Result<(), StoreError>;
     /// 原样返回记录，**不过滤过期**。过期判定归 `guard` ——

@@ -35,7 +35,10 @@ pub struct RequestContext<'a> {
 }
 
 /// 会话安全威胁。见 spec 的判定与处置映射表。
+// 3.0 起封口：威胁分类会随检测能力增长，`#[non_exhaustive]` 把下游 `match`
+// 逼出一个 `_` 臂，此后新增变体是 minor 而非 major（下游不再被编译错误绑架）。
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SessionThreat {
     TokenUnknown,
     TokenExpired,
@@ -213,7 +216,10 @@ impl Default for SessionConfig {
 }
 
 /// 存储后端故障。
+// 同 SessionThreat：封口，新增故障种类（如 Redis 后端的超时 / 序列化失败）
+// 对下游只是「多一个 `_` 臂」，不再是破坏性变更。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StoreError {
     Unavailable,
     Corrupt,
@@ -231,13 +237,22 @@ impl std::fmt::Display for StoreError {
 impl std::error::Error for StoreError {}
 
 /// 调用方误用，或后端故障向上传递。
+///
+/// **错误分界**：只有需要校验调用方输入或做安全判定的方法才返回本类型
+/// （`bind` / `rotate`）；纯委派给 store 的方法（`revoke` / `revoke_all` /
+/// `purge_expired`）没有可误用的输入也不产生判定，直接透出 [`StoreError`]。
+// 封口理由同 SessionThreat：错误变体会随守卫的判定项增长。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SessionError {
     EmptyToken,
     EmptySubject,
     EmptyFingerprint,
-    /// `rotate` 的旧 token 不存在、已吊销或已过期。
+    /// `rotate` 的旧 token 不存在、已吊销或已过期，或指纹与本请求不符。
     UnknownSession,
+    /// `rotate` 的目标 token 已是一个在用会话（未吊销且未过期），
+    /// 包括 `new == old` —— 换到同一个 token 语义上自相矛盾，见 `rotate`。
+    TokenInUse,
     Store(StoreError),
 }
 
@@ -248,6 +263,7 @@ impl std::fmt::Display for SessionError {
             SessionError::EmptySubject => write!(f, "subject must not be empty"),
             SessionError::EmptyFingerprint => write!(f, "fingerprint must not be empty"),
             SessionError::UnknownSession => write!(f, "session not found or no longer valid"),
+            SessionError::TokenInUse => write!(f, "new token is already in use"),
             SessionError::Store(e) => write!(f, "session store error: {e}"),
         }
     }
@@ -415,6 +431,10 @@ mod tests {
             "session not found or no longer valid"
         );
         assert_eq!(
+            SessionError::TokenInUse.to_string(),
+            "new token is already in use"
+        );
+        assert_eq!(
             StoreError::Unavailable.to_string(),
             "session store unavailable"
         );
@@ -422,5 +442,6 @@ mod tests {
         let e = SessionError::from(StoreError::Corrupt);
         assert!(std::error::Error::source(&e).is_some());
         assert!(std::error::Error::source(&SessionError::EmptyToken).is_none());
+        assert!(std::error::Error::source(&SessionError::TokenInUse).is_none());
     }
 }

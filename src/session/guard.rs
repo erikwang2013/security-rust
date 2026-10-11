@@ -81,6 +81,13 @@ impl<S: SessionStore> SessionGuard<S> {
     ///
     /// 返回 `SessionVerdict` 而非 `Result`：认证路径上「拒绝」是正常结果而非错误，
     /// 强制调用方在类型层面处理每一种拒绝。
+    ///
+    /// `get` → `recent_logins` → `touch` 是三次独立锁获取，**不原子**（与
+    /// `throttle::Throttle::record_failure` 的窗口说明同一取舍）：并发下
+    /// `touch` 可能落在一条刚被 revoke / purge 掉的记录上（落空，无副作用），
+    /// 登录历史也可能读到略旧的一份。这不构成绕过 —— 各判定只吃自己那一份
+    /// 快照（`get` 返回的是克隆），没有跨字段的复合不变量会被撕开；
+    /// 要消除这个窗口得把「读记录 + 读历史 + 刷新 last_seen」并成一个 store 操作。
     pub fn verify(&self, ctx: &RequestContext, now: u64) -> SessionVerdict {
         // ── 门槛检查：记录不存在或不可读时，后续检查没有基线可比，必须提前退出 ──
         if ctx.token.is_empty() {
@@ -189,8 +196,22 @@ impl<S: SessionStore> SessionGuard<S> {
     /// 旧会话必须存在、未吊销、未过期，**且指纹与本次 ctx 相符** ——
     /// 否则等于允许攻击者拿别人的 token 换一个自己的新 token，是提权漏洞。
     ///
+    /// **前置条件：`new` 必须是一个未在用的 token**（不存在，或已过期，或已吊销
+    /// —— 死记录可以覆盖）。指向一个在用会话返回 [`SessionError::TokenInUse`]
+    /// 且不改动任何记录：store 的 `put` 是无条件 upsert，不挡这一下就等于让
+    /// 攻击者用自己的会话把受害者的记录整个盖掉（受害者下次 verify 读到的是
+    /// 攻击者的指纹 ⇒ 被动踢下线）。`new == old` 同样按 `TokenInUse` 拒绝 ——
+    /// 它自相矛盾（既要吊销 old 又要 new 可用），静默接受只会得到一个
+    /// 「rotate 成功但会话已死」的假象。
+    ///
     /// 新记录的身份字段（subject / location / coords / signature）一律
     /// 以服务端记录为准，不接受 `ctx` 覆盖。
+    ///
+    /// **TOCTOU**：查 `new` 与随后的 `put` 是两次独立锁获取，**不原子** ——
+    /// 两个并发 rotate 指向同一个新 token 时仍可能互相覆盖（要攻击者猜到对方
+    /// 的新 token 并卡进这个窄窗）。本 trait 没有条件写 / 事务，这个检查把
+    /// 「必然覆盖」降级为「窄窗竞争」，仍然值得；要彻底关窗得加 `put_if_absent`
+    /// 一类的原子原语。
     pub fn rotate(
         &self,
         old: &str,
@@ -209,6 +230,16 @@ impl<S: SessionStore> SessionGuard<S> {
 
         if !ct_eq(record.fingerprint.as_bytes(), ctx.fingerprint.as_bytes()) {
             return Err(SessionError::UnknownSession);
+        }
+
+        // 「在用」与上面判 old 口径一致：存在 && 未吊销 && 未过期。
+        // 放在指纹校验之后：先确认调用方有权动这个旧会话，再谈新 token 能不能用。
+        // 命中即返回，此时还没有任何写入 —— 失败的 rotate 不留副作用。
+        if let Some(target) = self.store.get(new)?
+            && !target.revoked
+            && target.expires_at > now
+        {
+            return Err(SessionError::TokenInUse);
         }
 
         self.store.put(SessionRecord {
@@ -484,5 +515,102 @@ mod tests {
         g.rotate("old", "new", &ctx("old", "VICTIM", FP), NOW + 10)
             .unwrap();
         assert_eq!(g.store.get("new").unwrap().unwrap().subject, "u1");
+    }
+
+    #[test]
+    fn rotate_rejects_collision_with_live_token() {
+        // 攻击者拿自己的活跃会话把新 token 指向受害者的 token：不挡这一下，
+        // 无条件 upsert 的 put 会整条盖掉受害者记录，受害者下次 verify 就
+        // 读到自己记录上的攻击者指纹 ⇒ 被动踢下线
+        const VFP: &str = "ip=5.6.7.8|ua=safari";
+        let g = guard();
+        g.bind(&ctx("victim-token", "victim", VFP), NOW).unwrap();
+        g.bind(&ctx("attacker-old", "attacker", FP), NOW).unwrap();
+
+        assert_eq!(
+            g.rotate(
+                "attacker-old",
+                "victim-token",
+                &ctx("attacker-old", "attacker", FP),
+                NOW + 10
+            )
+            .unwrap_err(),
+            SessionError::TokenInUse
+        );
+
+        // 受害者记录一字未动：还是他自己的 subject / 指纹，且仍然放行
+        let r = g.store.get("victim-token").unwrap().unwrap();
+        assert_eq!(r.subject, "victim");
+        assert_eq!(r.fingerprint, VFP);
+        assert!(!r.revoked);
+        assert!(
+            g.verify(&ctx("victim-token", "victim", VFP), NOW + 20)
+                .is_allowed()
+        );
+        // 失败的 rotate 不留副作用：攻击者自己的旧会话也照旧可用
+        assert!(
+            g.verify(&ctx("attacker-old", "attacker", FP), NOW + 20)
+                .is_allowed()
+        );
+    }
+
+    #[test]
+    fn rotate_may_reuse_a_revoked_token() {
+        // 死记录（已吊销）不是「在用」，可以覆盖：登出后留下的记录不该永久占坑
+        let g = guard();
+        g.bind(&ctx("dead", "u1", FP), NOW).unwrap();
+        g.revoke("dead").unwrap();
+        g.bind(&ctx("old", "u2", FP), NOW).unwrap();
+
+        g.rotate("old", "dead", &ctx("old", "u2", FP), NOW + 10)
+            .unwrap();
+        let r = g.store.get("dead").unwrap().unwrap();
+        assert_eq!(r.subject, "u2");
+        assert!(!r.revoked, "覆盖后是全新记录，revoked 不继承");
+        assert_eq!(r.expires_at, NOW + 10 + 3_600);
+    }
+
+    #[test]
+    fn rotate_may_reuse_an_expired_token() {
+        // stale 过期于 NOW+3600；old 晚 1 秒签发（过期于 NOW+3601），
+        // 好让它在下面的边界时刻仍然活着可轮换
+        let g = guard();
+        g.bind(&ctx("stale", "u1", FP), NOW).unwrap();
+        g.bind(&ctx("old", "u2", FP), NOW + 1).unwrap();
+
+        // 边界内（expires_at > now 仍为真）→ 在用，拒绝
+        assert_eq!(
+            g.rotate("old", "stale", &ctx("old", "u2", FP), NOW + 3_599)
+                .unwrap_err(),
+            SessionError::TokenInUse
+        );
+
+        // expires_at == now → 已过期（与 verify 的 `expires_at <= now` 同一口径），可以覆盖
+        g.rotate("old", "stale", &ctx("old", "u2", FP), NOW + 3_600)
+            .unwrap();
+        let r = g.store.get("stale").unwrap().unwrap();
+        assert_eq!(r.subject, "u2");
+        assert_eq!(r.expires_at, NOW + 3_600 + 3_600);
+    }
+
+    #[test]
+    fn rotate_to_the_same_token_is_rejected_and_session_survives() {
+        // new == old 自相矛盾：既要吊销 old 又要 new 可用。旧实现 put 完立刻
+        // revoke，返回 Ok 而会话已死 —— 调用方以为续期成功，用户却被登出。
+        // 拒绝且零副作用，让这种调用当场暴露而不是静默失效。
+        let g = guard();
+        g.bind(&ctx("t", "u1", FP), NOW).unwrap();
+
+        assert_eq!(
+            g.rotate("t", "t", &ctx("t", "u1", FP), NOW + 10)
+                .unwrap_err(),
+            SessionError::TokenInUse
+        );
+
+        let r = g.store.get("t").unwrap().unwrap();
+        assert!(!r.revoked, "失败的 rotate 不能有副作用");
+        assert_eq!(r.expires_at, NOW + 3_600, "TTL 也不该被续期");
+        assert_eq!(r.last_seen, NOW);
+        assert!(g.verify(&ctx("t", "u1", FP), NOW + 20).is_allowed());
     }
 }
