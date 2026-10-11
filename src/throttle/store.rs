@@ -55,12 +55,25 @@ struct Entry {
     window_secs: u64,
 }
 
+/// 单个 key 的 [`Entry::failures`] 向量上限。
+///
+/// 为什么需要硬上限：`retain` 的代价是 O(保留条数)，而保留条数取决于调用方传入的
+/// `now`。时钟冻结（或倒退）时没有任何失败会滑出窗口，向量随调用次数无上限增长
+/// —— 性能评审实测每次调用 2.5 万条 6.7µs、10 万条 52.9µs，且随条数线性恶化，
+/// 内存同理。有上限后单 key 的每次调用与占用都是常数级。
+///
+/// 上限为什么安全：封禁判定只看 `count >= threshold`，计数越过阈值后再涨没有区分度，
+/// 在饱和值停住即可 —— 于是**阈值 ≤ 本值的配置判定逐字不变**（默认 5，远在范围内），
+/// 只有把 threshold 配到 1024 以上的调用方才会观察到计数封顶、永不触发封禁。
+const MAX_TRACKED_FAILURES: usize = 1024;
+
 /// 内存后端。无后台线程，且**只有写路径**会清理：`record_failure` 顺手
 /// `retain` 掉滑出窗口的失败，`failure_count` / `is_banned` 这类读路径不碰状态。
 ///
 /// 于是有两条边界：
-/// - 每个 key 的 `failures` 向量有界（每次 `record_failure` 都 retain，上界是
-///   窗口内的失败数）；
+/// - 每个 key 的 `failures` 向量有界：每次 `record_failure` 都 retain，上界是
+///   `min(窗口内失败数, MAX_TRACKED_FAILURES)` —— 前者挡正常增长，后者挡时钟
+///   冻结/回拨、窗口整个失效时的无界增长；
 /// - **map 本身的条目数无上限** —— key 只增不减，只有 `purge_expired`（和
 ///   `reset`）会移除条目。
 ///
@@ -104,12 +117,17 @@ impl ThrottleStore for MemoryThrottleStore {
         let mut g = Self::lock(&self.entries);
         let e = g.entry(key.to_string()).or_default();
         e.window_secs = window_secs;
-        // ponytail: 每次失败做一次 O(窗口内失败数) 的 retain，不需要后台清理线程。
-        // 天花板 = 单个 key 在窗口内的失败数；持续暴力破解下约等于 window_secs 条
-        // （默认 60），单个 key 几 KB。若把窗口/threshold 调到万级，改环形缓冲
-        // 或分桶计数（bucket 粒度 = window/10 的固定格子）。
+        // ponytail: 每次失败做一次 O(保留条数) 的 retain，不需要后台清理线程。
+        // 天花板 = min(窗口内失败数, MAX_TRACKED_FAILURES)：默认配置（窗口 60s、
+        // 每秒重试一次）约 60 条，单 key 几 KB。若 threshold 动到 1024 以上，
+        // 改环形缓冲或分桶计数（bucket 粒度 = window/10 的固定格子）。
         e.failures.retain(|t| *t > cutoff);
-        e.failures.push(now);
+        // 封顶：满了就不再 push，计数在饱和值停住，而不是让向量无限长。
+        // 对阈值 ≤ 上限的配置，`count >= threshold` 的判定与不封顶时逐字相同
+        // （见 MAX_TRACKED_FAILURES 的说明）。
+        if e.failures.len() < MAX_TRACKED_FAILURES {
+            e.failures.push(now);
+        }
         Ok(e.failures.len() as u32)
     }
 
@@ -173,6 +191,7 @@ impl ThrottleStore for MemoryThrottleStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::throttle::{Throttle, ThrottleConfig, ThrottleDecision};
 
     const NOW: u64 = 1_000_000;
 
@@ -228,6 +247,37 @@ mod tests {
         // 跳到窗口之外再来一次，前面 60 条也应全部被清掉
         s.record_failure("k", NOW + 1_000, 60).unwrap();
         assert_eq!(len(&s, "k"), 1);
+    }
+
+    #[test]
+    fn frozen_clock_growth_is_capped_and_threshold_verdict_unchanged() {
+        // 时钟冻结 ⇒ 没有失败滑出窗口 ⇒ 只有硬上限挡得住无界增长
+        let s = store();
+        let mut count = 0;
+        for _ in 0..(MAX_TRACKED_FAILURES + 100) {
+            count = s.record_failure("k", NOW, 60).unwrap();
+        }
+        assert_eq!(len(&s, "k"), MAX_TRACKED_FAILURES, "failures 必须有硬上限");
+        assert_eq!(count, MAX_TRACKED_FAILURES as u32, "计数在饱和值上停住");
+
+        // 阈值 ≤ 上限时封禁判定不受影响：饱和计数照样越线，
+        // Banned 与未封顶时完全相同（阈值 5 在第 5 次就封）
+        let t = Throttle::new(
+            MemoryThrottleStore::new(),
+            ThrottleConfig {
+                threshold: 5,
+                window_secs: 60,
+                ban_secs: 900,
+            },
+        );
+        for _ in 0..(MAX_TRACKED_FAILURES + 100) {
+            t.record_failure("k", NOW).unwrap();
+        }
+        assert_eq!(
+            t.check("k", NOW),
+            ThrottleDecision::Banned { until: NOW + 900 },
+            "饱和不得改变封禁判定"
+        );
     }
 
     #[test]

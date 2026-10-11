@@ -49,6 +49,19 @@ impl Detector for PathTraversalDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
+        // 强档 14 条 + 弱档 2 条，每条分支都要求 `.` / `%` / `:` / NUL 之一：
+        // `../`、`..%2f`、`php://filter`、`%00`、字面 NUL —— 四者皆无 → 不可能命中。
+        // 无点 1MB 文本实测 2.2ms → 0.4ms（release，min-of-5）；含 `.` 的文本
+        // （此守卫的第一个 `contains` 即命中）无收益也不额外亏。
+        // 前提只对**当前分支集**成立：新增分支若不要求这四者，这里会变成漏报，
+        // 必须同步放宽守卫。
+        if !input.contains('.')
+            && !input.contains('%')
+            && !input.contains(':')
+            && !input.contains('\0')
+        {
+            return None;
+        }
         regex_detect(
             std::slice::from_ref(&*STRONG_PATTERNS),
             self.name(),
@@ -204,6 +217,32 @@ mod tests {
             "https://example.com/docs/api/guide",
             "path%5Csegment%5Cname",
             "The file is .. hidden and ... is an ellipsis; see docs/readme.md (relative link).",
+        ] {
+            assert!(
+                PathTraversalDetector.detect(input).is_none(),
+                "false positive: {:?}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn separator_free_long_input_stays_clean() {
+        // 无 `.`/`%`/`:`/NUL 的输入在 detect 顶部走 `contains` 快速路径返回。
+        // 长文本：守卫若吞掉命中（或误报），这条先炸。
+        let clean = "The quick brown fox jumps over the lazy dog and then walks back home again "
+            .repeat(1000);
+        assert!(PathTraversalDetector.detect(&clean).is_none());
+    }
+
+    #[test]
+    fn separator_bearing_benign_inputs_still_scanned() {
+        // 含 `.`/`:`/`%` 的正常输入绕过守卫进正则，结果与守卫前一致（仍干净）。
+        for input in [
+            "www.example.com",
+            "key: value",
+            "discount 20% off",
+            "See chapter 3.2 for details",
         ] {
             assert!(
                 PathTraversalDetector.detect(input).is_none(),

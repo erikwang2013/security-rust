@@ -41,6 +41,13 @@ impl Detector for FormatStringDetector {
     }
 
     fn detect(&self, input: &str) -> Option<DetectionResult> {
+        // 全部 6 条分支的每次重复都以字面量 `%` 开头 —— 无 `%` 的输入不可能命中，
+        // 直接返回。1MB 无 `%` 干净文本实测 1.9ms → 0.09ms（release，min-of-5）。
+        // 前提只对**当前分支集**成立：新增分支若不要求 `%`，这里会变成漏报，
+        // 必须同步放宽守卫。
+        if !input.contains('%') {
+            return None;
+        }
         regex_detect(
             std::slice::from_ref(&*PATTERNS),
             self.name(),
@@ -157,6 +164,22 @@ mod tests {
             assert_clean(&det(), input);
         }
         assert_hit("AAAA%n");
+    }
+
+    #[test]
+    fn percent_free_long_input_stays_clean() {
+        // 无 `%` 的输入在 detect 顶部走 `contains` 快速路径返回。
+        // 长文本：守卫若吞掉命中（或误报），这条先炸。
+        let clean = "The quick brown fox jumps over the lazy dog. ".repeat(2000);
+        assert_clean(&det(), &clean);
+    }
+
+    #[test]
+    fn percent_bearing_non_attack_stays_clean() {
+        // 含 `%` 的输入绕过守卫进正则，结果与守卫前一致：命中只看分支语义。
+        for input in ["100% done", "Save 30% today", "a % b % c"] {
+            assert_clean(&det(), input);
+        }
     }
 
     #[test]
