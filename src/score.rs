@@ -40,6 +40,7 @@ fn weight(severity: &Severity) -> u32 {
 }
 
 /// 原始风险分：所有命中按权重累加。
+#[must_use]
 pub fn total(results: &[DetectionResult]) -> u32 {
     results.iter().map(|r| weight(&r.severity)).sum()
 }
@@ -49,6 +50,7 @@ pub fn total(results: &[DetectionResult]) -> u32 {
 /// - 空结果 → `None`
 /// - 任一 `Severity::Critical` → `Critical`（短路，不靠累加）
 /// - 否则按总分分档，多条低危叠加可升级（3×Low = 15 → Medium，8×Low = 40 → High）
+#[must_use]
 pub fn score(results: &[DetectionResult]) -> RiskLevel {
     if results.is_empty() {
         return RiskLevel::None;
@@ -78,6 +80,7 @@ pub struct RiskAssessment {
 }
 
 /// 一次算出等级与原始分，省得调用方算两遍。
+#[must_use]
 pub fn assess(results: &[DetectionResult]) -> RiskAssessment {
     RiskAssessment {
         level: score(results),
@@ -103,11 +106,11 @@ mod tests {
     }
 
     fn hits(severities: &[Severity]) -> Vec<DetectionResult> {
-        severities.iter().map(|s| hit(s.clone())).collect()
+        severities.iter().map(|s| hit(*s)).collect()
     }
 
     fn repeated(severity: Severity, n: usize) -> Vec<DetectionResult> {
-        (0..n).map(|_| hit(severity.clone())).collect()
+        (0..n).map(|_| hit(severity)).collect()
     }
 
     #[test]

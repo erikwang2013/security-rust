@@ -21,8 +21,10 @@ use security_rust::protocol::{
 use security_rust::score::{RiskLevel, total};
 use security_rust::{AttackCategory, DetectionResult, Detector, Scanner, Severity, assess};
 
-/// 与 `Scanner::default()` 内部注册的同一批检测器，直接构造以取得 `name()`。
-/// 数量由 `all_detectors_are_registered_and_named` 锁死为 32。
+/// 与 `Scanner::default()` 内部注册的同一批检测器，直接构造以取得可调用的实例
+/// （`detect()` 需要具体对象，`detector_names()` 只给名字）。
+/// 数量由 `all_detectors_are_registered_and_named` 锁死为 32，且该测试会把本清单
+/// 逐名与 `Scanner::detector_names()` 交叉核对 —— 漏加/多加一个都会当场红。
 fn detectors() -> Vec<Box<dyn Detector>> {
     vec![
         Box::new(XssDetector),
@@ -60,8 +62,11 @@ fn detectors() -> Vec<Box<dyn Detector>> {
     ]
 }
 
+/// 名字不再手抄：直接取自默认装配（手抄的第二份清单正是旧版的漂移隐患）。
+/// 手抄的实例清单是否与 scanner 同步，由 `all_detectors_are_registered_and_named`
+/// 往下与 `detectors()` 交叉核对。
 fn names() -> Vec<&'static str> {
-    detectors().iter().map(|d| d.name()).collect()
+    Scanner::default().detector_names().collect()
 }
 
 // ---------------------------------------------------------------- 确定性伪随机
@@ -142,7 +147,7 @@ fn random_inputs(seed: u64, count: usize) -> Vec<String> {
 
 // ---------------------------------------------------------------------- 不变量
 
-/// 1. 名字唯一、非空、snake_case。
+/// 1. 名字唯一、非空、snake_case，且手抄的实例清单与 scanner 注册完全一致。
 #[test]
 fn all_detectors_are_registered_and_named() {
     let names = names();
@@ -153,6 +158,12 @@ fn all_detectors_are_registered_and_named() {
     let before = sorted.len();
     sorted.dedup();
     assert_eq!(sorted.len(), before, "检测器名字重复: {sorted:?}");
+
+    // 交叉核对：名字来自 detector_names()，实例清单来自 detectors()。
+    // 两个方向都覆盖 —— scanner 新增检测器没抄进清单、或清单里少了/多了名字，都会红。
+    let mut from_instances: Vec<&'static str> = detectors().iter().map(|d| d.name()).collect();
+    from_instances.sort_unstable();
+    assert_eq!(sorted, from_instances, "实例清单与 Scanner 注册漂移");
 
     for n in &names {
         assert!(!n.is_empty(), "检测器名字为空");
@@ -221,7 +232,8 @@ fn scan_is_deterministic() {
 
 /// 5. `scan_with(&[n])` 恰是 `scan()` 中 `attack_type == n` 的那些。
 ///
-/// 顺带反查清单完整性：`scan()` 不会报出 32 个名字以外的检测器。
+/// 顺带一条一致性下限：`scan()` 报出的 `attack_type` 必须都在 `detector_names()` 里
+/// （名字清单与 scanner 的强校验在 `all_detectors_are_registered_and_named`）。
 #[test]
 fn scan_with_is_exactly_the_filtered_scan() {
     let scanner = Scanner::default();
@@ -231,7 +243,7 @@ fn scan_with_is_exactly_the_filtered_scan() {
         for r in &all {
             assert!(
                 names.contains(&r.attack_type.as_str()),
-                "scan 报出未知检测器 {}（清单不全）",
+                "scan 报出未注册的检测器 {}",
                 r.attack_type
             );
         }

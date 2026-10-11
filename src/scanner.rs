@@ -18,6 +18,28 @@ use crate::protocol::{
 use crate::score::{self, RiskAssessment};
 use crate::{Detector, result::DetectionResult};
 
+/// 检测器集合：按注册顺序对同一输入逐个运行。
+///
+/// ## 两套装配语义
+///
+/// [`Scanner::default()`] / [`Scanner::new()`] 一键装配全部 32 个检测器，零配置可用；
+/// [`Scanner::builder()`] 则**从空表起步** —— 忘了 `.with_detector()` 也能 `build()`
+/// 成功，得到一个什么都不检的 scanner，`scan()` 恒返回空且不报错。自定义装配后
+/// 用 [`Scanner::detector_names`] 自检注册结果（失败是静默的，这是最容易踩的坑）。
+///
+/// ## `scan` 与 `scan_with`
+///
+/// - [`scan`](Self::scan) 跑全部检测器；[`scan_with`](Self::scan_with) 只跑名字在
+///   名单里的那些。名单里的**未知名字静默跳过、不报错**（`scan_with(x, &["typo"])`
+///   恒为空），重复名字也不会让检测器跑两遍 —— 调用方可以放心用一份跨版本共享的
+///   名单，不必逐个做存在性检查。
+/// - 两者对同一输入**每个检测器至多产出一条**结果（有强弱两档的先试强档）。
+/// - 结果顺序 = 注册顺序，同一输入任意次扫描结果完全一致（无状态、确定性）。
+///
+/// ## 只报告，不拦截
+///
+/// 库自身不做任何拒绝动作：拒绝线（如 `risk.level >= RiskLevel::High`）由调用方定，
+/// 参考 `examples/waf.rs`。
 pub struct Scanner {
     detectors: Vec<Box<dyn Detector>>,
 }
@@ -68,14 +90,27 @@ impl Default for Scanner {
 }
 
 impl Scanner {
+    /// 等价于 [`Scanner::default()`]：装配全部 32 个检测器。空表起步请走
+    /// [`Scanner::builder()`]。
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// 自定义装配的起点，**空表**、不含任何检测器（与 `default()` 不同）。
     pub fn builder() -> ScannerBuilder {
         ScannerBuilder::default()
     }
 
+    /// 用全部检测器扫描 `input`，返回全部命中（顺序 = 注册顺序）。
+    ///
+    /// 输入干净或为空串时返回空 `Vec` —— 没有错误通道，检测器不产生"扫描失败"这种状态。
+    /// 有强弱两档的检测器先试强档，故**每个 `attack_type` 至多出现一次**；弱信号
+    /// 也在结果里（`severity == Severity::Low`），不会静默漏报。
+    ///
+    /// 判"要不要拒绝这条输入"别只看结果非空 —— 单条弱信号不足以越过拒绝线，用
+    /// [`Scanner::assess`] 看聚合分。
+    // 丢掉扫描结果 = 静默放行：命中被算出来又没人看，等于 WAF 没装。
+    #[must_use]
     pub fn scan(&self, input: &str) -> Vec<DetectionResult> {
         let mut results = Vec::new();
         for detector in &self.detectors {
@@ -86,11 +121,27 @@ impl Scanner {
         results
     }
 
-    /// 把「有/无命中」升级为「累积风险」：多条低危叠加可升到更高等级。
+    /// 把「有/无命中」升级为「累积风险」：内部就是 `scan` + [`score::assess`]，
+    /// 多条低危叠加可升到更高等级。
+    ///
+    /// 返回的 [`RiskAssessment`] 带三项：`level`（聚合等级）、`score`（权重和）、
+    /// `results`（参与聚合的命中条数）。拒绝线看 `level` 而不是"有无命中"：
+    /// 单条弱信号（Low，5 分）够不到 `RiskLevel::High`（40 分），而多条弱信号叠加
+    /// 会升级 —— 这正是弱信号档存在的意义（见 [`DetectionResult::severity`]）。
+    #[must_use]
     pub fn assess(&self, input: &str) -> RiskAssessment {
         score::assess(&self.scan(input))
     }
 
+    /// 只跑名字出现在 `names` 里的检测器，其余完全跳过。
+    ///
+    /// `names` 里的**未知名字静默忽略**（不报错、不告警）：`scan_with(x, &["typo"])`
+    /// 返回空 `Vec` 而不是失败；重复的名字不会让同一检测器跑两遍。语义上等价于
+    /// `scan(input)` 再按 `attack_type ∈ names` 过滤（`tests/invariants.rs` 对 32 个
+    /// 名字逐一核验这条等价性），但省掉了不相关检测器的正则开销。
+    ///
+    /// 空名单 ⇒ 恒返回空 `Vec`。
+    #[must_use]
     pub fn scan_with(&self, input: &str, names: &[&str]) -> Vec<DetectionResult> {
         let mut results = Vec::new();
         for detector in &self.detectors {
@@ -102,19 +153,42 @@ impl Scanner {
         }
         results
     }
+
+    /// 按注册顺序列出全部检测器名字。
+    ///
+    /// 用途是自检：`Scanner::builder()` 从空表起步，装完可以先看这里确认装上了什么；
+    /// 也可以拿它给 [`Scanner::scan_with`] 拼名单。名字即
+    /// [`Detector::name`] 的返回值，同时是 [`DetectionResult::attack_type`] 的取值。
+    ///
+    /// 返回 `impl Iterator<Item = &'static str> + '_`：名字本身是 `'static` 字面量，
+    /// 迭代器只在借用 `self` 期间有效；收集成 `Vec<&'static str>` 即可脱离 scanner 保存。
+    pub fn detector_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.detectors.iter().map(|d| d.name())
+    }
 }
 
+/// [`Scanner`] 的自定义装配器。用 [`Scanner::builder()`] 构造。
+///
+/// **从空表起步**：与 `Scanner::default()` 的 32 个检测器无关，装多少就是多少；
+/// 一个都不装也能 `build()` 成功，得到的 scanner 恒返回空结果 —— 这是行为不是错误，
+/// 自检用 [`Scanner::detector_names`]。
 #[derive(Default)]
 pub struct ScannerBuilder {
     detectors: Vec<Box<dyn Detector>>,
 }
 
 impl ScannerBuilder {
+    /// 追加一个检测器（按调用顺序注册，也决定 `scan()` 的结果顺序）。
+    ///
+    /// 同一个检测器注册两次不报错，`scan()` 里就会跑两遍、产出两条结果 ——
+    /// 名字不用于去重（32 个内置检测器名字唯一，由 `tests/invariants.rs` 钉住）。
+    #[must_use]
     pub fn with_detector(mut self, detector: Box<dyn Detector>) -> Self {
         self.detectors.push(detector);
         self
     }
 
+    /// 产出 scanner。不会失败，也不会补默认检测器（空表就是空 scanner）。
     pub fn build(self) -> Scanner {
         Scanner {
             detectors: self.detectors,
