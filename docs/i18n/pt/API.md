@@ -70,7 +70,7 @@ O critério é a **forma**, não o nome do arquivo: para o mesmo `../`, um únic
 
 ```toml
 [dependencies]
-security-rust = "3.0.0"
+security-rust = "4.0.0"
 ```
 
 ### Início Rápido

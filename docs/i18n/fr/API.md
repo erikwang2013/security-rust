@@ -70,7 +70,7 @@ Le critère est la **forme**, pas le nom du fichier : pour un même `../`, un se
 
 ```toml
 [dependencies]
-security-rust = "3.0.0"
+security-rust = "4.0.0"
 ```
 
 ### Démarrage rapide

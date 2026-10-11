@@ -72,7 +72,7 @@ assert_eq!(a.level, RiskLevel::Medium);
 
 ```toml
 [dependencies]
-security-rust = "3.0.0"
+security-rust = "4.0.0"
 ```
 
 ### بداية سريعة
