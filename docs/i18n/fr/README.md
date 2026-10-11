@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 détecteurs de fichiers
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 suites d'intégration : session, débit, cycle de vie, invariants, robustesse, bout en bout, limitation multi-clés
+├── tests/                  8 suites d'intégration : session, débit, cycle de vie, invariants, robustesse, bout en bout, limitation multi-clés, corpus du monde réel
 ├── examples/
 │   ├── waf.rs              Exemple de chaîne de bout en bout (scan → limitation → session → action)
 │   └── axum_middleware.rs  Référence d'intégration du middleware axum
@@ -92,7 +92,7 @@ Cette bibliothèque se positionne comme un **analyseur d'entrées pur** — elle
 
 ### Deux niveaux : signaux forts et signaux faibles
 
-Un détecteur ne signale **pas** chaque correspondance à la sévérité qu'il déclare. 18 des 32 détecteurs répartissent leurs motifs en deux niveaux (les statiques `STRONG_PATTERNS` / `WEAK_PATTERNS` du code source) :
+Un détecteur ne signale **pas** chaque correspondance à la sévérité qu'il déclare. 18 des 32 détecteurs ont un niveau de signal faible (les correspondances sont toujours signalées avec le `Severity::Low` fixe) : 17 d'entre eux portent les deux niveaux — 15 les séparent avec les statiques `STRONG_PATTERNS` / `WEAK_PATTERNS` du code source, tandis que `cors` / `hpp` décident de leurs niveaux par des conditions inline ; le dernier, `dns_rebinding`, est faible de bout en bout :
 
 | Niveau | Critère | Sévérité signalée | Une correspondance isolée franchit-elle le seuil de rejet ? |
 |------|------|-----------|------------------|
@@ -186,10 +186,10 @@ Les motifs marqués `faible` dans les tableaux sont des **signaux faibles** : il
 | Détecteur | Motifs couverts | Sévérité |
 |--------|---------|--------|
 | **ssrf** | Métadonnées cloud `169.254.169.254` et `metadata.google.internal` (sans contexte d'URL), IP internes en **position d'autorité d'URL** (après `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, protocoles dangereux `gopher://`/`dict://`/`ftp://user@`/`file:///` ; `faible` : les mêmes littéraux internes en **position hors URL** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` sont identiques octet pour octet) | Critical |
-| **xxe** | Déclaration d'entité `<!ENTITY`, références externes `SYSTEM`/`PUBLIC`, entités paramètres `%`, déclaration DTD `<!DOCTYPE` | Critical |
+| **xxe** | `<!ENTITY` suivi d'un blanc (insensible à la casse) — un seul motif couvre toutes les formes de déclaration d'entité : références externes `SYSTEM`/`PUBLIC`, entités paramètres `%` ; un `<!DOCTYPE` nu ou `SYSTEM "…"`/`PUBLIC "…"` en prose ne sont pas des signaux (on en trouve partout dans les documents HTML / SVG ordinaires et le texte courant) | Critical |
 | **header_injection** | En-têtes propres à la réponse précédés de `\r\n` : `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, ou `%0d` accompagné de `%0a` (y compris dans l'ordre inverse `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` sont des en-têtes de **requête**, identiques octet pour octet à ceux de toute requête bien formée : ils ne sont donc plus un signal (la forme encodée `%0d%0aContent-Length:` reste couverte par `%0d`+`%0a`) | High |
 | **host_header** | **Deux** en-têtes `Host:` (la RFC 7230 §5.4 impose un 400, deux analyseurs en lisent des valeurs différentes) ; `faible` : `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — les proxies ajoutent eux-mêmes ces en-têtes, identiques octet pour octet à une falsification par le client (`X-Forwarded-For`/`X-Forwarded-Proto` ne sont pas signalés du tout) | High |
-| **request_smuggling** | Doubles en-têtes `Transfer-Encoding`, contrebande `Content-Length: 0`, confusion de terminaison chunked `\r\n0\r\n` | High |
+| **request_smuggling** | En-têtes `Transfer-Encoding` répétés (les deux couches de parseurs choisissent des valeurs différentes), ou `Transfer-Encoding :` avec un blanc entre le nom d'en-tête et le deux-points (interdit par la RFC 7230 §3.2.4, mais un parseur laxiste y voit quand même du chunked) ; un `Transfer-Encoding: chunked` isolé est l'écriture normale d'une requête à corps chunked et n'est **pas** signalé | High |
 | **open_redirect** | Redirections par pseudo-protocole `javascript:`/`data:text/html`/`data:text/plain` (schéma suivi d'un contenu) ; `faible` : URLs relatives au protocole `//evil.com` — identiques aux liens CDN des commentaires de code et de la documentation | Medium |
 | **cors** | `Access-Control-Allow-Origin: null` et `Access-Control-Allow-Origin: *` **associé à** `Access-Control-Allow-Credentials: true` ; `faible` : `Origin: null` côté requête (les iframes en bac à sable, les URLs `data:` et les fichiers locaux ont exactement cette origine — il faut qu'un `ACAO: null` la renvoie pour que cela prenne). Isolément, l'un comme l'autre est normal pour une API publique ou une ressource statique et n'est pas signalé | Medium |
 | **websocket** | `Origin: null` simultané avec une mise à niveau WebSocket (CSWSH), `ws://` vers des adresses de bouclage/privées/link-local (dont le point de métadonnées cloud `169.254.169.254`) | High |
@@ -215,7 +215,7 @@ Les motifs marqués `faible` dans les tableaux sont des **signaux faibles** : il
 |--------|---------|--------|
 | **path_traversal** | **Multi-niveaux** `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, contournement par encodage URL `%2e%2e`/`..%2f`/`..%5c`, wrappers de protocole `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, troncature par octet nul `%00` ; `faible` : un `../`/`..\` à un seul niveau (identique à un chemin relatif dans du code ou de la documentation) | Critical |
 | **upload** | Balises PHP `<?php`/`<?=`, balises ASP `<%@`/`<%=`, motifs de backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobales `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, contournement par encodage `base64_decode()` | Critical |
-| **data_leak** | PAN de carte de crédit à 16 chiffres (Visa/MasterCard/AmEx/Discover/JCB/Diners), clés d'accès AWS `AKIA...`, en-têtes de clé privée PEM `-----BEGIN`, clés API OpenAI/LLM `sk-...`, chaînes de connexion de base de données `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**doivent porter une userinfo `@`** : `mysql://root:secret@db` est signalé, `redis://shared-memory` et `postgres://localhost:5432/app` relèvent d'une configuration ordinaire et ne le sont **pas**), `jdbc:` (sans cette contrainte), jetons JWT | Critical |
+| **data_leak** | PAN de carte de crédit à 16 chiffres (Visa/MasterCard/AmEx/Discover/JCB/Diners), clés d'accès AWS `AKIA...`, en-têtes de clé privée PEM `-----BEGIN`, clés API OpenAI/LLM `sk-...`, chaînes de connexion de base de données `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**doivent porter une userinfo `@`** : `mysql://root:secret@db` est signalé, `redis://shared-memory` et `postgres://localhost:5432/app` relèvent d'une configuration ordinaire et ne le sont **pas**), `jdbc:` (sans cette contrainte) | Critical |
 
 ---
 
@@ -229,7 +229,7 @@ Son critère est « une adresse interne apparaît dans `Host:` » — et cette m
 
 ### Cette bibliothèque ne peut pas analyser son propre code source, ses tests ni sa documentation
 
-Le plafond d'un scanner à signatures : mesuré sur ce dépôt, 78 fichiers sur 298 franchissent le seuil de rejet, et ils contiennent tous des chaînes d'attaque **par construction** — charges de test, littéraux d'expression régulière du code des détecteurs eux-mêmes, et tableaux README/OWASP qui nomment ces motifs. Un README n'est pas défectueux parce qu'il liste `(a+)+`. Analyser ses propres artefacts suppose d'exclure d'abord ce corpus — ou de choisir un autre critère.
+Le plafond d'un scanner à signatures : en passant chaque fichier texte UTF-8 sous la racine du dépôt (en sautant `target/` et `.git/`) au `Scanner`, 85 fichiers sur 383 franchissent le seuil de rejet, et ils contiennent tous des chaînes d'attaque **par construction** — charges de test, littéraux d'expression régulière du code des détecteurs eux-mêmes, et tableaux README/OWASP qui nomment ces motifs. Un README n'est pas défectueux parce qu'il liste `(a+)+`. Analyser ses propres artefacts suppose d'exclure d'abord ce corpus — ou de choisir un autre critère.
 
 ### `upload` signale `<%@` / `<?php` comme Critical où qu'ils apparaissent
 
@@ -292,7 +292,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Signal faible : le jeton apparaît simplement ⇒ toujours Low, ne franchit pas le seuil à lui seul
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (l'espace final fait partie du motif)
 ```
 
 L'évaluation du risque ramène la liste des correspondances à un seul niveau, pour que des signaux de faible gravité empilés ne passent pas silencieusement inaperçus :
@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Construction
 cargo build --release
 
-# Tests (580 : 431 unitaires, 148 d'intégration, 1 de documentation)
+# Tests (594 : 445 unitaires, 148 d'intégration, 1 de documentation)
 cargo test
 
 # Exemple de chaîne de bout en bout (scan → limitation → session → action)

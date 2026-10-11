@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 detektor file
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 suite integrasi: sesi, pembatasan laju, siklus hidup, invarian, ketangguhan, end-to-end, pembatasan multi-kunci
+├── tests/                  8 suite integrasi: sesi, pembatasan laju, siklus hidup, invarian, ketangguhan, end-to-end, pembatasan multi-kunci, korpus dunia nyata
 ├── examples/
 │   ├── waf.rs              Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)
 │   └── axum_middleware.rs  Referensi integrasi middleware axum
@@ -94,7 +94,7 @@ Pernyataan ini hanya berlaku untuk `Scanner` dan `Detector`. `session` dan `thro
 
 ### Dua Tingkat: Sinyal Kuat dan Sinyal Lemah
 
-Detektor **tidak** melaporkan setiap temuan pada severity yang dideklarasikannya. 18 dari 32 detektor membagi polanya menjadi dua tingkat (static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber):
+Detektor **tidak** melaporkan setiap temuan pada severity yang dideklarasikannya. Dari 32 detektor, 18 memiliki tingkat sinyal lemah (temuan selalu dilaporkan sebagai `Severity::Low` tetap): 17 di antaranya memiliki tingkat kuat dan lemah sekaligus — 15 membagi tingkatnya lewat dua static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber, sedangkan tingkat pada `cors` / `hpp` ditentukan kondisi inline; sisanya, `dns_rebinding`, seluruhnya lemah:
 
 | Tingkat | Kriteria | Severity yang dilaporkan | Satu temuan bisa melewati garis tolak? |
 |------|------|-----------|------------------|
@@ -201,10 +201,10 @@ Pola yang ditandai `lemah` di dalam tabel termasuk **sinyal lemah**: melaporkan 
 | Detektor | Pola yang Dicakup | Severity |
 |--------|---------|--------|
 | **ssrf** | Metadata cloud `169.254.169.254` dan `metadata.google.internal` (tidak menuntut konteks URL), IP intranet di **posisi authority URL** (setelah `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, protokol berbahaya `gopher://`/`dict://`/`ftp://user@`/`file:///`; `lemah`: literal intranet yang sama di **posisi non-URL** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` identik byte per byte) | Critical |
-| **xxe** | Deklarasi entitas `<!ENTITY`, referensi eksternal `SYSTEM`/`PUBLIC`, entitas parameter `%`, deklarasi DTD `<!DOCTYPE` | Critical |
+| **xxe** | `<!ENTITY` diikuti spasi (tidak peka huruf besar-kecil) — satu pola mencakup semua bentuk deklarasi entitas: referensi eksternal `SYSTEM`/`PUBLIC`, entitas parameter `%`; sedangkan `<!DOCTYPE` telanjang dan `SYSTEM "…"`/`PUBLIC "…"` di dalam prosa bukan sinyal (keduanya ada di mana-mana dalam dokumen HTML / SVG biasa dan teks normal) | Critical |
 | **header_injection** | `\r\n` sebelum header khusus respons: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, atau `%0d` bersamaan dengan `%0a` (termasuk urutan terbalik `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` adalah header **permintaan**, identik byte per byte dengan header pesan yang normal, sehingga bukan lagi sinyal (bentuk terenkode `%0d%0aContent-Length:` tetap ditangkap oleh `%0d`+`%0a`) | High |
 | **host_header** | **Dua** header `Host:` (RFC 7230 §5.4 mewajibkan 400, dua lapis parser berbeda pendapat); `lemah`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — proxy sendiri juga menambahkannya, identik byte per byte dengan pemalsuan klien (`X-Forwarded-For`/`X-Forwarded-Proto` tidak dilaporkan) | High |
-| **request_smuggling** | Header `Transfer-Encoding` ganda, penyelundupan `Content-Length: 0`, obfuscation terminasi chunked `\r\n0\r\n` | High |
+| **request_smuggling** | Header `Transfer-Encoding` yang berulang (dua lapis parser memilih nilai berbeda), atau `Transfer-Encoding :` dengan spasi antara nama header dan titik dua (dilarang RFC 7230 §3.2.4, tetapi parser longgar tetap menganggapnya chunked); `Transfer-Encoding: chunked` sendirian adalah penulisan normal permintaan berbadan chunked dan **tidak dilaporkan** | High |
 | **open_redirect** | Lompatan protokol semu `javascript:`/`data:text/html`/`data:text/plain` (menuntut isi setelah scheme); `lemah`: URL relatif protokol `//evil.com` — identik dengan tautan CDN di komentar sumber dan dokumentasi | Medium |
 | **cors** | `Access-Control-Allow-Origin: null`, dan `Access-Control-Allow-Origin: *` **bersamaan dengan** `Access-Control-Allow-Credentials: true`; `lemah`: `Origin: null` di sisi permintaan (iframe sandbox, URL `data:`, dan berkas lokal memiliki origin `null`; baru berlaku jika server memantulkannya dengan `ACAO: null`). Masing-masing sendirian normal untuk API publik dan aset statis dan tidak dilaporkan | Medium |
 | **websocket** | `Origin: null` bersamaan dengan upgrade WebSocket (CSWSH), `ws://` menuju alamat loopback/pribadi/link-local (termasuk endpoint metadata cloud `169.254.169.254`) | High |
@@ -230,7 +230,7 @@ Pola yang ditandai `lemah` di dalam tabel termasuk **sinyal lemah**: melaporkan 
 |--------|---------|--------|
 | **path_traversal** | Traversal **banyak tingkat** `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, bypass terenkode URL `%2e%2e`/`..%2f`/`..%5c`, pembungkus protokol `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncation null byte `%00`; `lemah`: `../`/`..\` satu tingkat (identik dengan path relatif di sumber atau dokumentasi) | Critical |
 | **upload** | Tag PHP `<?php`/`<?=`, tag ASP `<%@`/`<%=`, pola backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobal `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, bypass enkode `base64_decode()` | Critical |
-| **data_leak** | PAN kartu kredit 16 digit (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, header kunci privat PEM `-----BEGIN`, API Key OpenAI/LLM `sk-...`, string koneksi database `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**wajib memuat userinfo `@`**: `mysql://root:secret@db` dilaporkan, sedangkan `redis://shared-memory` dan `postgres://localhost:5432/app` adalah konfigurasi biasa dan **tidak dilaporkan**), `jdbc:` (tanpa batasan itu), JWT Token | Critical |
+| **data_leak** | PAN kartu kredit 16 digit (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, header kunci privat PEM `-----BEGIN`, API Key OpenAI/LLM `sk-...`, string koneksi database `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**wajib memuat userinfo `@`**: `mysql://root:secret@db` dilaporkan, sedangkan `redis://shared-memory` dan `postgres://localhost:5432/app` adalah konfigurasi biasa dan **tidak dilaporkan**), `jdbc:` (tanpa batasan itu) | Critical |
 
 ---
 
@@ -244,7 +244,7 @@ Kriterianya adalah «alamat internal muncul di `Host:`» — dan bentuk yang sam
 
 ### Pustaka ini tidak bisa memindai sumber, tes, dan dokumentasinya sendiri
 
-Langit-langit pemindai tanda tangan: terukur pada repositori ini, 78 dari 298 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
+Langit-langit pemindai tanda tangan: setiap berkas teks UTF-8 di bawah akar repositori (melewati `target/` dan `.git/`) diumpankan ke `Scanner`, dan terukur 85 dari 383 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
 
 ### `upload` selalu melaporkan `<%@` / `<?php` sebagai Critical
 
@@ -291,7 +291,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Sinyal lemah: token hanya muncul ⇒ selalu Low, tidak melewati garis tolak sendirian (lihat «Dua Tingkat»)
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (pola memuat spasi di akhirnya)
 ```
 
 Penilaian risiko merangkum daftar temuan menjadi satu tingkat, agar beberapa sinyal berisiko rendah tidak diabaikan diam-diam:
@@ -368,7 +368,7 @@ let _ = throttle.record_failure(key, now);
 # Build
 cargo build --release
 
-# Tes (580: 431 unit + 148 integrasi + 1 doc test)
+# Tes (594: 445 unit + 148 integrasi + 1 doc test)
 cargo test
 
 # Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)

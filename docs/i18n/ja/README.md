@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               ファイル系検出器 3 個
 │   ├── session/            SessionGuard + SessionStore（guard / store / geo）
 │   └── throttle/           Throttle + ThrottleStore（guard / store）
-├── tests/                  統合テスト 7 スイート: セッション、レート制限、ライフサイクル、不変条件、ロバスト性、エンドツーエンド、多次元レート制限
+├── tests/                  統合テスト 8 スイート: セッション、レート制限、ライフサイクル、不変条件、ロバスト性、エンドツーエンド、多次元レート制限、実世界コーパス
 ├── examples/
 │   ├── waf.rs              エンドツーエンドパイプラインの例（スキャン → レート制限 → セッション → 判定）
 │   └── axum_middleware.rs  axum ミドルウェア組み込みリファレンス
@@ -95,7 +95,7 @@ security-rust/
 
 ### 二段階判定：強シグナルと弱シグナル
 
-検出器は**「ヒットすれば宣言された重大度で報告する」わけではありません**。32 個の検出器のうち 18 個がパターンを二段階に分けています（ソース内の `STRONG_PATTERNS` / `WEAK_PATTERNS`）:
+検出器は**「ヒットすれば宣言された重大度で報告する」わけではありません**。32 個の検出器のうち 18 個に弱シグナル段階があり（ヒットは常に固定の `Severity::Low` で報告）: そのうち 17 個は強・弱の両段階を持ちます —— 15 個はソース内の `STRONG_PATTERNS` / `WEAK_PATTERNS` という 2 つの静的定数で段階分けし、`cors` / `hpp` の段階判定はインライン条件です。残る `dns_rebinding` は全段階が弱です:
 
 | 段階 | 判定基準 | 報告される重大度 | 単条で拒否ラインを越えられるか |
 |------|------|-----------|------------------|
@@ -192,10 +192,10 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 | 検出器 | 対象パターン | 重大度 |
 |--------|---------|--------|
 | **ssrf** | `169.254.169.254` クラウドメタデータと `metadata.google.internal`（URL 文脈を要求しない）、**URL authority 位置**（`//` の後）の内部 IP `10.x`/`172.16-31.x`/`192.168.x`/`127.x`、`//localhost`、`//0.0.0.0`、`//[::1]`、危険なプロトコル `gopher://`/`dict://`/`ftp://user@`/`file:///`；`弱`: **URL 以外の位置**にある同じ内部リテラル（`X-Forwarded-For: 10.0.0.5`、`bind 127.0.0.1`、`{"host": "10.0.0.1"}` はバイト単位で同形） | Critical |
-| **xxe** | `<!ENTITY` エンティティ宣言、`SYSTEM`/`PUBLIC` 外部参照、`%` パラメーターエンティティ、`<!DOCTYPE` DTD 宣言 | Critical |
+| **xxe** | `<!ENTITY` に続く空白（大文字小文字を問わない）—— 1 本のパターンで全エンティティ宣言形態をカバー: `SYSTEM`/`PUBLIC` 外部参照、`%` パラメーターエンティティ。裸の `<!DOCTYPE` や散文中の `SYSTEM "…"`/`PUBLIC "…"` は信号ではない（通常の HTML / SVG 文書や普通のテキストに溢れている） | Critical |
 | **header_injection** | レスポンス専用ヘッダーの前に置かれた `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`、`%0d` と `%0a` の同時出現（逆順の `%0a…%0d` を含む）。`Content-Length`/`Content-Type`/`Transfer-Encoding` は**リクエスト**ヘッダーであり、正常なメッセージのあらゆるヘッダーとバイト単位で同形なので信号から外した（エンコード形態 `%0d%0aContent-Length:` は依然 `%0d`+`%0a` が捕捉する） | High |
 | **host_header** | **2 つ**の `Host:` ヘッダー（RFC 7230 §5.4 は一律 400 を要求する。2 層のパーサーで解釈が食い違う）；`弱`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` —— プロキシ自身も付けるヘッダーで、クライアントの偽造とバイト単位で同じ（`X-Forwarded-For`/`X-Forwarded-Proto` は報告しない） | High |
-| **request_smuggling** | 二重 `Transfer-Encoding` ヘッダー、`Content-Length: 0` スモグリング、`\r\n0\r\n` chunked 終端難読化 | High |
+| **request_smuggling** | 重複した `Transfer-Encoding` ヘッダー（2 層のパーサーが異なる値を選ぶ）、またはヘッダー名とコロンの間に空白を挟んだ `Transfer-Encoding :`（RFC 7230 §3.2.4 が禁止するが、寛容なパーサーは chunked と解釈する）。単独の `Transfer-Encoding: chunked` は chunked ボディを伴う正常なリクエストの書き方であり、**報告しない** | High |
 | **open_redirect** | `javascript:`/`data:text/html`/`data:text/plain` 疑似プロトコルによるリダイレクト（scheme の後に内容を要求する）；`弱`: `//evil.com` プロトコル相対 URL —— ソースのコメントやドキュメント内の CDN リンクと同形 | Medium |
 | **cors** | `Access-Control-Allow-Origin: null`、および `Access-Control-Allow-Origin: *` と `Access-Control-Allow-Credentials: true` の**同時出現**；`弱`: リクエスト側の `Origin: null`（サンドボックス iframe、`data:` URL、ローカルファイルのオリジンは `null` であり、サーバーが `ACAO: null` で反射して初めて成立する）。単独で現れる分には公開 API や静的アセットでは正常であり報告しない | Medium |
 | **websocket** | `Origin: null` と WebSocket アップグレードの同時出現（CSWSH）、`ws://` がループバック / プライベート / リンクローカルアドレスを指す場合（クラウドメタデータエンドポイント `169.254.169.254` を含む） | High |
@@ -221,7 +221,7 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 |--------|---------|--------|
 | **path_traversal** | **多段**のトラバーサル `(?:\.\./){2,}`/`(?:\.\.\\){2,}`、`%2e%2e`/`..%2f`/`..%5c` URL エンコード迂回、`php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` プロトコルラッパー、`%00` ヌルバイト切り詰め；`弱`: 単段の `../`/`..\`（どのソースにある相対パスとも同形） | Critical |
 | **upload** | `<?php`/`<?=` PHP タグ、`<%@`/`<%=` ASP タグ、`eval($_`/`system($_`/`exec($_`/`passthru($_` バックドアパターン、`$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER` スーパーグローバル変数、`base64_decode()` エンコード迂回 | Critical |
-| **data_leak** | 16 桁クレジットカード PAN（Visa/MasterCard/AmEx/Discover/JCB/Diners）、AWS Access Key `AKIA...`、PEM 秘密鍵ヘッダー `-----BEGIN`、OpenAI/LLM API Key `sk-...`、データベース接続文字列 `mongodb://`/`mysql://`/`postgresql://`/`redis://`（**`@` を含む userinfo が必須**: `mysql://root:secret@db` は報告し、`redis://shared-memory`、`postgres://localhost:5432/app` は設定の常態なので**報告しない**）、`jdbc:`（この制約なし）、JWT Token | Critical |
+| **data_leak** | 16 桁クレジットカード PAN（Visa/MasterCard/AmEx/Discover/JCB/Diners）、AWS Access Key `AKIA...`、PEM 秘密鍵ヘッダー `-----BEGIN`、OpenAI/LLM API Key `sk-...`、データベース接続文字列 `mongodb://`/`mysql://`/`postgresql://`/`redis://`（**`@` を含む userinfo が必須**: `mysql://root:secret@db` は報告し、`redis://shared-memory`、`postgres://localhost:5432/app` は設定の常態なので**報告しない**）、`jdbc:`（この制約なし） | Critical |
 
 ---
 
@@ -235,7 +235,7 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 
 ### このライブラリは自分のソース・テスト・ドキュメントをスキャンできない
 
-シグネチャスキャナの天井: 実測で本リポジトリの 298 ファイル中 78 ファイルが拒否ラインを越えますが、それらは**構造上**すべて攻撃文字列を含んでいます —— テストペイロード、検出器ソース自身の正規表現リテラル、そしてこれらのパターンを列挙する README と OWASP の表です。README は `(a+)+` と書いたからといって欠陥にはなりません。自分の成果物をスキャンするには、まずこのコーパスを除外するか、別の判定基準に替える必要があります。
+シグネチャスキャナの天井: リポジトリ直下の UTF-8 テキストファイルすべて（`target/` と `.git/` は除外）を `Scanner` に通した実測で、383 ファイル中 85 ファイルが拒否ラインを越えますが、それらは**構造上**すべて攻撃文字列を含んでいます —— テストペイロード、検出器ソース自身の正規表現リテラル、そしてこれらのパターンを列挙する README と OWASP の表です。README は `(a+)+` と書いたからといって欠陥にはなりません。自分の成果物をスキャンするには、まずこのコーパスを除外するか、別の判定基準に替える必要があります。
 
 ### `upload` は `<%@` / `<?php` を一律 Critical とする
 
@@ -281,7 +281,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // 弱シグナル: トークンが出現しただけ ⇒ 常に Low、単独では拒否ラインを越えない（「二段階判定」参照）
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (末尾の空白もパターンに含まれる)
 ```
 
 リスクスコアリングはヒットの一覧を 1 つの等級にまとめ、複数の低リスク信号が黙って無視されるのを防ぎます:
@@ -357,7 +357,7 @@ let _ = throttle.record_failure(key, now);
 # ビルド
 cargo build --release
 
-# テスト（580 件: ユニット 431 + 統合 148 + ドキュメントテスト 1）
+# テスト（594 件: ユニット 445 + 統合 148 + ドキュメントテスト 1）
 cargo test
 
 # エンドツーエンドパイプラインの例（スキャン → レート制限 → セッション → 判定）

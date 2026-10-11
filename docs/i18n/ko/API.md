@@ -39,7 +39,7 @@ pub struct DetectionResult {
 
 ## 2단계 신호: 강한 신호와 약한 신호
 
-32개 탐지기 중 18개가 패턴을 두 단계로 나눈다(소스의 `STRONG_PATTERNS` / `WEAK_PATTERNS`). `DetectionResult`의 필드 구조는 그대로이고, 달라지는 것은 `severity` 값이다:
+32개 탐지기 중 18개에 약한 신호 단계가 있다(적중 시 항상 고정 `Severity::Low`로 보고). 그중 17개는 강·약 두 단계를 모두 가지며, 15개는 소스의 두 정적 상수 `STRONG_PATTERNS` / `WEAK_PATTERNS`로 단계를 나누고 `cors` / `hpp`의 강 단계는 인라인 조건이다. 나머지 `dns_rebinding`은 전체 단계가 약하다. `DetectionResult`의 필드 구조는 그대로이고, 달라지는 것은 `severity` 값이다:
 
 | 단계 | 판정 기준 | `severity` | 단일 적중이 거부선을 넘는가 |
 |------|------|-----------|------------------|
@@ -96,7 +96,7 @@ fn main() {
 
     // 약한 신호는 같은 탐지기, 같은 attack_type을 지나며 severity만 Low가 된다
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (끝의 공백도 패턴에 포함된다)
 }
 ```
 
@@ -266,7 +266,7 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 
 ### 이 라이브러리는 자기 소스·테스트·문서를 스캔할 수 없다
 
-시그니처 스캐너의 천장: 실측으로 이 저장소의 298개 파일 중 78개가 거부선을 넘는데, 그 모두가 **구조상** 공격 문자열을 담고 있다 —— 테스트 페이로드, 탐지기 소스 자체의 정규식 리터럴, 그리고 이 패턴들을 나열하는 README와 OWASP 표다. README는 `(a+)+`를 적었다고 해서 결함이 되지 않는다. 자기 산출물을 스캔하려면 먼저 이 코퍼스를 제외하거나 다른 판정 기준으로 바꿔야 한다.
+시그니처 스캐너의 천장: 저장소 루트 아래 모든 UTF-8 텍스트 파일(`target/`와 `.git/` 제외)을 `Scanner`에 넣어 실측한 결과 383개 파일 중 85개가 거부선을 넘는데, 그 모두가 **구조상** 공격 문자열을 담고 있다 —— 테스트 페이로드, 탐지기 소스 자체의 정규식 리터럴, 그리고 이 패턴들을 나열하는 README와 OWASP 표다. README는 `(a+)+`를 적었다고 해서 결함이 되지 않는다. 자기 산출물을 스캔하려면 먼저 이 코퍼스를 제외하거나 다른 판정 기준으로 바꿔야 한다.
 
 ### `upload`는 `<%@` / `<?php`를 일괄 Critical로 보고한다
 

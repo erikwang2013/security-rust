@@ -14,7 +14,7 @@
 | 🟡 | 部分覆盖：只解决了这一类风险的一半，另一半必须由别的手段补齐 |
 | ❌ | 不在范围内：本库对该类风险不产生任何信号 |
 
-**先读这条：两档信号。** 32 个检测器里有 18 个把模式分成强 / 弱两档（见 [README 的「两档判定」](../README.md#两档判定强信号与弱信号)）。本文各表中标 `（弱）` 的特征上报 `Severity::Low`（5 分），**不能单独越过调用方的拒绝线**（参考流水线取 `risk.level >= RiskLevel::High`，即 40 分）；只有 `assess()` 聚合多条命中才可能升级。因此下表里「有对应检测器」不等于「该载荷会被拒」—— 弱档命中是**信号**，处置权在调用方。
+**先读这条：两档信号。** 32 个检测器里有 18 个存在弱信号档（命中一律上报固定 `Severity::Low`），其中 17 个为强 / 弱两档、`dns_rebinding` 全档皆弱（见 [README 的「两档判定」](../README.md#两档判定强信号与弱信号)）。本文各表中标 `（弱）` 的特征上报 `Severity::Low`（5 分），**不能单独越过调用方的拒绝线**（参考流水线取 `risk.level >= RiskLevel::High`，即 40 分）；只有 `assess()` 聚合多条命中才可能升级。因此下表里「有对应检测器」不等于「该载荷会被拒」—— 弱档命中是**信号**，处置权在调用方。
 
 ---
 
@@ -58,8 +58,8 @@
 
 | 检测器 | 主要特征 |
 |--------|----------|
-| `xss` | `on*=` 事件处理器全表、`javascript:` / `vbscript:`（只认 scheme 后紧跟非空白）；（弱）`<script` / `<iframe` / `<embed` / `<object` / `<link` 标签、`expression(` |
-| `sql_injection` | `UNION [ALL] SELECT`、`SELECT ... FROM`、时间盲注（`sleep(` / `benchmark(` / `pg_sleep(` / `WAITFOR DELAY`，均限语句位置）、`LOAD_FILE(` / `INTO OUTFILE` / `DROP TABLE` / `INSERT INTO`、注释符拆词（`UN/**/ION`）与 `' OR '1'='1`；（弱）`information_schema` |
+| `xss` | `on*=` 事件处理器全表、`javascript:` / `vbscript:`（只认 scheme 后紧跟非空白）；（弱）`<script` / `<iframe` / `<embed` / `<object` / `<link` 标签（含以标签名收尾的截断形态，如 `Send me <script`）、`expression(` |
+| `sql_injection` | `UNION [ALL] SELECT`、`SELECT ... FROM`、时间盲注（`sleep(` / `benchmark(` / `pg_sleep(` / `WAITFOR DELAY`，均限语句位置）、`LOAD_FILE(` / `INTO OUTFILE` / `DROP TABLE` / `INSERT INTO`、注释符拆词（`UN/**/ION`）、`' OR '1'='1` 与数字恒真 `1 OR 1=1` / `1 AND 1=1`（`--` / `#` 注释收尾也算，如 `admin' OR 1=1#`；`1 or 1 = 1 is a tautology` 这类讨论恒等式、尾随还有内容的散文不命中）；（弱）`information_schema` |
 | `command_injection` | `/dev/tcp`、`system("` / `shell_exec(` / `passthru(` / `popen(` / `pcntl_exec(` 调用形态、`cmd.exe /c` / `powershell -Command` 调用形态；（弱）反引号、`$(...)`、`\| cmd`、`\|\| cmd`、`&& cmd`、`exec(`、`>/dev/null`、`cat /etc/passwd`、裸 `cmd.exe` / `powershell` |
 | `nosql_injection` | `{"$ne":` / `$gt` / `$regex` / `$where` / `$or` / `$nin` 等 MongoDB 操作符 |
 | `ldap_injection` | `(&` / `(\|` / `(!(`、`*(cn=`、`(objectClass=`、`(uid=` |
@@ -94,10 +94,10 @@
 
 - `cors`：`Access-Control-Allow-Origin: null`、`Origin: null`，以及 `Access-Control-Allow-Origin: *` 与 `Access-Control-Allow-Credentials: true` **同现**。单写 `Access-Control-Allow-Origin: *` 或单写 `Access-Control-Allow-Credentials: true` 在公开 API 与静态资源里是常态，不报。
 - `header_injection`：响应头注入 —— `\r\n` 后接响应专有头（`Set-Cookie` / `Location` / `Refresh` / `Status` / `WWW-Authenticate`），或 `%0d` 与 `%0a` 同现。
-- `host_header`：**两个** `Host:` 头（RFC 7230 §5.4 要求一律回 400，两层解析器取值不一致）；（弱）`X-Forwarded-Host` / `X-Original-URL` / `X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部，但代理自己也会加这几个头，字节上与客户端伪造相同，故只报 Low。`X-Forwarded-For` / `X-Forwarded-Proto` **不报**（几乎每个走代理的请求都有，判伪造要看值，不看头名）。
-- `request_smuggling`：重复 `Transfer-Encoding`、`Transfer-Encoding: chunked`。
+- `host_header`：**两个** `Host:` 头（RFC 7230 §5.4 要求一律回 400，两层解析器取值不一致；折行 `\r\n Host:` 仍算相邻，空行之后的第二个 `Host:` 已在头块之外、属正文内容，不算）；（弱）`X-Forwarded-Host` / `X-Original-URL` / `X-Rewrite-URL` —— 这正是密码重置链接投毒、缓存投毒依赖的头部，但代理自己也会加这几个头，字节上与客户端伪造相同，故只报 Low。`X-Forwarded-For` / `X-Forwarded-Proto` **不报**（几乎每个走代理的请求都有，判伪造要看值，不看头名）。
+- `request_smuggling`：重复的 `Transfer-Encoding` 头（两层解析器取值不一致），或头名与冒号之间夹空白的 `Transfer-Encoding :`（RFC 7230 §3.2.4 禁止，宽松解析器却当作 chunked）。单独的 `Transfer-Encoding: chunked` 是带 chunked 请求体的正常写法，**不报**。
 - `websocket`：`Origin: null` 与 WebSocket 升级（`Upgrade: websocket`）同现（CSWSH）；`ws://` 指向环回 / 私网 / 链路本地地址（含云元数据端点 `169.254.169.254`）。
-- `xxe`：`<!DOCTYPE`、`<!ENTITY`、`SYSTEM "..."`、`PUBLIC "..."`（XML 解析器被允许展开外部实体，本质是解析器配置问题）。
+- `xxe`：`<!ENTITY` 后跟空白（大小写不敏感）—— 一条覆盖 `SYSTEM "..."` / `PUBLIC "..."` 外部引用与 `%` 参数实体等全部实体声明形态（XML 解析器被允许展开外部实体，本质是解析器配置问题）。裸 `<!DOCTYPE`、散文里的 `SYSTEM "..."` / `PUBLIC "..."` 不是信号：普通 HTML / SVG 文档与正常文本里到处都是。
 - `upload`：webshell 特征 —— `<?php` / `<?=` / `<% @` / `<script language="php">`、`eval($_` / `system($_` / `passthru($_` 等、`$_GET[` / `$_POST[` / `$_REQUEST[` / `$_SERVER[`、`base64_decode(`。
 
 **缺口**：本库不读你的配置文件，不扫端口和目录，不检查默认口令、调试开关、错误页堆栈泄露、`X-Content-Type-Options` / HSTS / CSP 等响应头是否下发、TLS 版本与套件是否合规。上列检测器看到的是**攻击载荷**，或（当调用方把报文/响应文本喂进来时）**报文里出现的危险头**，不是对上线配置的审计。
@@ -116,7 +116,7 @@
 
 - `session::SessionGuard` 检查：token 未知 / 已过期 / 已吊销、指纹不匹配（会话固定/劫持）、签名不匹配或缺失（常量时间比较）、请求时间偏移（重放）、位置变化、不可能旅行、store 不可用（fail-closed → `Block`）。返回 `SessionVerdict { decision: Allow | Challenge | Block, severity: Option<Severity>, threats }`（放行时 `severity` 为 `None`），并支持 `revoke` / `revoke_all` / `rotate`。
 - `throttle::Throttle` 按 key 统计窗口内失败次数，达到阈值即封禁 —— 面向暴力破解与撞库；`check_any` 可一次合并多个维度（如 IP + 账号）后取最严格结论。store 故障时 `check` / `check_any` 返回 `Unavailable` 而**不是** `Banned`（限流是纵深防御，不是主闸门，不让后端抖动变成自我 DoS）。
-- `jwt_attack` 匹配 `"alg":"none"`、`"kid"` 指向 `../` 或 `/dev/null`、`eyJ...eyJ...` 的无签名/截断 JWT 结构。
+- `jwt_attack` 匹配 `"alg":"none"`、`"kid"` 指向 `../` / `..\` / `/dev/null`、`eyJ...eyJ...` 的 JWT 三段结构（含空签名 / 空 payload 段的截断变体；完整签名的正常 JWT 因同形同样命中）。
 
 **缺口**：不做认证本身。不校验口令、不做 MFA、不查泄露口令库、不签发 token、**不计算 MAC** —— `RequestContext.signature` 必须是调用方算好的值传进来。`session` 判的是「这个会话是否被劫持或篡改」，不判「这个人凭据是否正确」；`throttle` 判的是「这个 key 试太多次了」，同样不等于身份可信。
 
@@ -126,7 +126,7 @@
 
 - `deserialization`：PHP 序列化特征 `O:len:"..."` / `C:len:"..."`、`unserialize(`、魔术方法 `__wakeup` / `__destruct` / `__construct` / `__toString` / `__call` / `__get` / `__set`、数组 `a:N:{`。
 - `prototype_pollution`：`__proto__`、`constructor.prototype`、`constructor[`、`__defineGetter__` / `__defineSetter__` / `__lookupGetter__` / `__lookupSetter__`、`hasOwnProperty[`。
-- `jwt_attack`：签名剥离 / `alg:none` —— 完整性校验被绕过的结构特征。
+- `jwt_attack`：签名剥离 / `alg:none` / `eyJ...eyJ...` 三段结构（含正常签名的 JWT）—— 完整性校验被绕过的结构特征与同形形态。
 - `csv_injection` / `formula_injection`：数据被**下游**表格软件当作公式或 DDE 命令执行，是「不可信数据未经校验直接进入下一环节」的典型。
 
 **缺口**：不验证任何签名或制品 —— 没有 MAC 校验、没有反序列化类型白名单、没有 CI/CD 与依赖完整性校验、不校验数据来源。反序列化规则以 PHP 特征与 JS 原型链为主：Java gadget 链（ysoserial 系）、Python `pickle`、.NET `BinaryFormatter`、Ruby `Marshal` 都没有专门规则（其中一部分可能被 `command_injection` / `format_string` 顺带命中，但**不能依赖**）。

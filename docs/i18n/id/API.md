@@ -39,7 +39,7 @@ pub struct DetectionResult {
 
 ## Dua Tingkat: Sinyal Kuat dan Sinyal Lemah
 
-18 dari 32 detektor membagi polanya menjadi dua tingkat (static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber). Struktur bidang `DetectionResult` tidak berubah; yang berubah adalah nilai `severity`:
+Dari 32 detektor, 18 memiliki tingkat sinyal lemah (temuan selalu dilaporkan sebagai `Severity::Low` tetap). 17 di antaranya memiliki tingkat kuat dan lemah sekaligus — 15 membagi tingkatnya lewat dua static `STRONG_PATTERNS` / `WEAK_PATTERNS` di dalam sumber, tingkat kuat `cors` / `hpp` adalah kondisi inline; sisanya, `dns_rebinding`, seluruhnya lemah. Struktur bidang `DetectionResult` tidak berubah; yang berubah adalah nilai `severity`:
 
 | Tingkat | Kriteria | `severity` | Satu temuan bisa melewati garis tolak? |
 |------|------|-----------|------------------|
@@ -96,7 +96,7 @@ fn main() {
 
     // Sinyal lemah melewati detektor dan attack_type yang sama, hanya severity-nya Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (pola memuat spasi di akhirnya)
 }
 ```
 
@@ -238,7 +238,7 @@ Kriterianya adalah «alamat internal muncul di `Host:`» — dan bentuk yang sam
 
 ### Pustaka ini tidak bisa memindai sumber, tes, dan dokumentasinya sendiri
 
-Langit-langit pemindai tanda tangan: terukur pada repositori ini, 78 dari 298 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
+Langit-langit pemindai tanda tangan: setiap berkas teks UTF-8 di bawah akar repositori (melewati `target/` dan `.git/`) diumpankan ke `Scanner`, dan terukur 85 dari 383 berkas melewati garis tolak, dan semuanya memuat string serangan **secara konstruksi** — payload tes, literal regex dari sumber detektor itu sendiri, serta tabel README dan OWASP yang mencantumkan pola-pola tersebut. README tidak menjadi cacat karena menuliskan `(a+)+`. Untuk memindai artefak sendiri, kecualikan dulu korpus itu, atau ganti kriteria.
 
 ### `upload` selalu melaporkan `<%@` / `<?php` sebagai Critical
 

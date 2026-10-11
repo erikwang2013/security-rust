@@ -37,7 +37,7 @@ pub struct DetectionResult {
 
 ## Zwei Stufen: starke und schwache Signale
 
-18 der 32 Detektoren teilen ihre Muster in zwei Stufen (die Statics `STRONG_PATTERNS` / `WEAK_PATTERNS` im Quelltext). Die Feldstruktur von `DetectionResult` bleibt unverändert; geändert hat sich der Wert von `severity`:
+18 der 32 Detektoren haben eine Schwachsignal-Stufe (Treffer werden immer mit dem festen `Severity::Low` gemeldet). 17 von ihnen tragen beide Stufen — 15 teilen sie über die beiden Statics `STRONG_PATTERNS` / `WEAK_PATTERNS` im Quelltext, die starke Stufe von `cors` / `hpp` ist eine Inline-Bedingung; der verbleibende `dns_rebinding` ist durchgehend schwach. Die Feldstruktur von `DetectionResult` bleibt unverändert; geändert hat sich der Wert von `severity`:
 
 | Stufe | Kriterium | `severity` | Überschreitet ein einzelner Treffer die Ablehnungsgrenze? |
 |------|------|-----------|------------------|
@@ -94,7 +94,7 @@ fn main() {
 
     // Ein schwaches Signal nutzt denselben Detektor und denselben attack_type, meldet aber Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (das Leerzeichen am Ende gehört zum Muster)
 }
 ```
 
@@ -234,7 +234,7 @@ Sein Kriterium lautet „im `Host:`-Header steht eine interne Adresse" — und g
 
 ### Diese Bibliothek kann ihren eigenen Quelltext, ihre Tests und ihre Doku nicht scannen
 
-Die Obergrenze des Signatur-Scanners: gemessen an diesem Repository überschreiten 78 von 298 Dateien die Ablehnungsgrenze, und sie enthalten **konstruktionsbedingt** alle Angriffsstrings — Testlasten, die Regex-Literale der Detektor-Quelltexte selbst und die README- und OWASP-Tabellen, die diese Muster auflisten. Ein README wird nicht dadurch mangelhaft, dass es `(a+)+` auflistet. Wer die eigenen Artefakte scannen will, muss diesen Korpus zuerst ausschließen — oder ein anderes Kriterium wählen.
+Die Obergrenze des Signatur-Scanners: feedet man jede UTF-8-Textdatei unterhalb des Repo-Wurzelverzeichnisses (ohne `target/` und `.git/`) in den `Scanner`, überschreiten 85 von 383 Dateien die Ablehnungsgrenze, und sie enthalten **konstruktionsbedingt** alle Angriffsstrings — Testlasten, die Regex-Literale der Detektor-Quelltexte selbst und die README- und OWASP-Tabellen, die diese Muster auflisten. Ein README wird nicht dadurch mangelhaft, dass es `(a+)+` auflistet. Wer die eigenen Artefakte scannen will, muss diesen Korpus zuerst ausschließen — oder ein anderes Kriterium wählen.
 
 ### `upload` meldet `<%@` / `<?php` überall als Critical
 

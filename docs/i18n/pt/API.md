@@ -37,7 +37,7 @@ pub struct DetectionResult {
 
 ## Dois Níveis: Sinais Fortes e Fracos
 
-18 dos 32 detectores dividem seus padrões em dois níveis (os estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` do código-fonte). A estrutura de campos de `DetectionResult` não muda; o que muda é o valor de `severity`:
+18 dos 32 detectores têm um nível de sinal fraco (os acertos são sempre reportados com o `Severity::Low` fixo). 17 deles têm os dois níveis — 15 os separam com os dois estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` do código-fonte, o nível forte de `cors` / `hpp` é uma condição inline; o restante, `dns_rebinding`, é fraco do início ao fim. A estrutura de campos de `DetectionResult` não muda; o que muda é o valor de `severity`:
 
 | Nível | Critério | `severity` | Um único acerto cruza a linha de rejeição? |
 |------|------|-----------|------------------|
@@ -94,7 +94,7 @@ fn main() {
 
     // Um sinal fraco usa o mesmo detector e o mesmo attack_type, mas reporta Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (o espaço final faz parte do padrão)
 }
 ```
 
@@ -234,7 +234,7 @@ Seu critério é «aparece um endereço interno no cabeçalho `Host:`» — e es
 
 ### Esta Biblioteca Não Consegue Escanear o Próprio Código-Fonte, os Próprios Testes nem a Própria Documentação
 
-O teto do escâner de assinaturas: medido neste repositório, 78 de 298 arquivos cruzam a linha de rejeição, e todos eles contêm strings de ataque **por construção**: cargas de teste, os próprios literais de expressão regular do código dos detectores e as tabelas de README/OWASP que nomeiam esses padrões. Um README não é defeituoso por listar `(a+)+`. Para escanear os próprios artefatos é preciso excluir antes esse corpus, ou escolher outro critério.
+O teto do escâner de assinaturas: alimentando cada arquivo de texto UTF-8 sob a raiz do repositório (pulando `target/` e `.git/`) no `Scanner`, 85 de 383 arquivos cruzam a linha de rejeição, e todos eles contêm strings de ataque **por construção**: cargas de teste, os próprios literais de expressão regular do código dos detectores e as tabelas de README/OWASP que nomeiam esses padrões. Um README não é defeituoso por listar `(a+)+`. Para escanear os próprios artefatos é preciso excluir antes esse corpus, ou escolher outro critério.
 
 ### `upload` Reporta `<%@` / `<?php` como Critical Onde Aparecerem
 

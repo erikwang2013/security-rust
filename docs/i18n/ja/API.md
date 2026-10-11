@@ -39,7 +39,7 @@ pub struct DetectionResult {
 
 ## 二段階信号：強シグナルと弱シグナル
 
-32 個の検出器のうち 18 個がパターンを二段階に分けています（ソース内の `STRONG_PATTERNS` / `WEAK_PATTERNS`）。`DetectionResult` のフィールド構造は変わらず、変わるのは `severity` の値です:
+32 個の検出器のうち 18 個に弱シグナル段階があります（ヒットは常に固定の `Severity::Low` で報告）。そのうち 17 個は強・弱の両段階を持ち、15 個はソース内の 2 つの静的定数 `STRONG_PATTERNS` / `WEAK_PATTERNS` で段階分けし、`cors` / `hpp` の強段階はインライン条件です。残る `dns_rebinding` は全段階が弱です。`DetectionResult` のフィールド構造は変わらず、変わるのは `severity` の値です:
 
 | 段階 | 判定基準 | `severity` | 単条で拒否ラインを越えられるか |
 |------|------|-----------|------------------|
@@ -96,7 +96,7 @@ fn main() {
 
     // 弱シグナルは同じ検出器・同じ attack_type を通り、severity だけが Low になる
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (末尾の空白もパターンに含まれる)
 }
 ```
 
@@ -266,7 +266,7 @@ println!("{} / {} / {}", assessment.level, assessment.score, assessment.results)
 
 ### このライブラリは自分のソース・テスト・ドキュメントをスキャンできない
 
-シグネチャスキャナの天井: 実測で本リポジトリの 298 ファイル中 78 ファイルが拒否ラインを越えますが、それらは**構造上**すべて攻撃文字列を含んでいます —— テストペイロード、検出器ソース自身の正規表現リテラル、そしてこれらのパターンを列挙する README と OWASP の表です。README は `(a+)+` と書いたからといって欠陥にはなりません。自分の成果物をスキャンするには、まずこのコーパスを除外するか、別の判定基準に替える必要があります。
+シグネチャスキャナの天井: リポジトリ直下の UTF-8 テキストファイルすべて（`target/` と `.git/` は除外）を `Scanner` に通した実測で、383 ファイル中 85 ファイルが拒否ラインを越えますが、それらは**構造上**すべて攻撃文字列を含んでいます —— テストペイロード、検出器ソース自身の正規表現リテラル、そしてこれらのパターンを列挙する README と OWASP の表です。README は `(a+)+` と書いたからといって欠陥にはなりません。自分の成果物をスキャンするには、まずこのコーパスを除外するか、別の判定基準に替える必要があります。
 
 ### `upload` は `<%@` / `<?php` を一律 Critical とする
 

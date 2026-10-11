@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 detectores de arquivos
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 suítes de integração: sessão, limitação de taxa, ciclo de vida, invariantes, robustez, ponta a ponta, limite por múltiplas chaves
+├── tests/                  8 suítes de integração: sessão, limitação de taxa, ciclo de vida, invariantes, robustez, ponta a ponta, limite por múltiplas chaves, corpus do mundo real
 ├── examples/
 │   ├── waf.rs              Exemplo de pipeline ponta a ponta (varredura → limitação de taxa → sessão → ação)
 │   └── axum_middleware.rs  Referência de integração do middleware axum
@@ -92,7 +92,7 @@ Esta biblioteca se posiciona como um **scanner de entrada puro** — recebe stri
 
 ### Dois Níveis: Sinais Fortes e Fracos
 
-Um detector **não** reporta todo acerto com a severidade que declara. 18 dos 32 detectores dividem seus padrões em dois níveis (os estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` do código-fonte):
+Um detector **não** reporta todo acerto com a severidade que declara. 18 dos 32 detectores têm um nível de sinal fraco (os acertos são sempre reportados com o `Severity::Low` fixo): 17 deles têm os dois níveis — 15 os separam com os estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` do código-fonte, enquanto `cors` / `hpp` decidem seus níveis por condições inline; o restante, `dns_rebinding`, é fraco do início ao fim:
 
 | Nível | Critério | Severidade reportada | Um único acerto cruza a linha de rejeição? |
 |------|------|-----------|------------------|
@@ -189,10 +189,10 @@ Os padrões marcados como `fraco` nas tabelas são **sinais fracos**: reportam `
 | Detector | Padrões cobertos | Severidade |
 |--------|---------|--------|
 | **ssrf** | Metadados de nuvem `169.254.169.254` e `metadata.google.internal` (sem contexto de URL), IPs internos em **posição de autoridade de URL** (depois de `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, protocolos perigosos `gopher://`/`dict://`/`ftp://user@`/`file:///`; `fraco`: os mesmos literais internos em **posição que não é URL** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` são idênticos byte a byte) | Critical |
-| **xxe** | Declarações de entidade `<!ENTITY`, referências externas `SYSTEM`/`PUBLIC`, entidades de parâmetro `%`, declarações DTD `<!DOCTYPE` | Critical |
+| **xxe** | `<!ENTITY` seguido de espaço em branco (sem diferenciar maiúsculas) — um único padrão cobre todas as formas de declaração de entidade: referências externas `SYSTEM`/`PUBLIC`, entidades de parâmetro `%`; um `<!DOCTYPE` nu ou `SYSTEM "…"`/`PUBLIC "…"` em prosa não são sinal (aparecem em toda parte em documentos HTML / SVG comuns e em texto corrido) | Critical |
 | **header_injection** | Cabeçalhos próprios da resposta precedidos de `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, ou `%0d` junto com `%0a` (também na ordem inversa `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` são cabeçalhos de **requisição**, idênticos byte a byte aos de qualquer requisição bem formada, então deixaram de ser sinal (a forma codificada `%0d%0aContent-Length:` continua coberta por `%0d`+`%0a`) | High |
 | **host_header** | **Dois** cabeçalhos `Host:` (a RFC 7230 §5.4 exige 400, dois analisadores leem valores diferentes); `fraco`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — proxies acrescentam esses cabeçalhos por conta própria, idênticos byte a byte a uma falsificação do cliente (`X-Forwarded-For`/`X-Forwarded-Proto` não são reportados de forma alguma) | High |
-| **request_smuggling** | Cabeçalhos duplos `Transfer-Encoding`, contrabando `Content-Length: 0`, ofuscação de término chunked `\r\n0\r\n` | High |
+| **request_smuggling** | Cabeçalhos `Transfer-Encoding` repetidos (as duas camadas de parser escolhem valores diferentes), ou `Transfer-Encoding :` com espaço entre o nome do cabeçalho e os dois-pontos (proibido pela RFC 7230 §3.2.4, mas um parser tolerante ainda lê como chunked); um `Transfer-Encoding: chunked` isolado é a grafia normal de uma requisição com corpo chunked e **não** é reportado | High |
 | **open_redirect** | Saltos por pseudo-protocolos `javascript:`/`data:text/html`/`data:text/plain` (esquema seguido de conteúdo); `fraco`: URLs relativas ao protocolo `//evil.com` — idênticas aos links de CDN em comentários de código e documentação | Medium |
 | **cors** | `Access-Control-Allow-Origin: null` e `Access-Control-Allow-Origin: *` **junto com** `Access-Control-Allow-Credentials: true`; `fraco`: `Origin: null` na requisição (iframes em sandbox, URLs `data:` e arquivos locais têm exatamente essa origem — é preciso que um `ACAO: null` devolva para fechar). Separados, os dois são normais em APIs públicas e recursos estáticos e não são reportados | Medium |
 | **websocket** | `Origin: null` junto com um upgrade WebSocket (CSWSH), `ws://` para endereços de loopback/privados/link-local (incluindo o endpoint de metadados de nuvem `169.254.169.254`) | High |
@@ -218,7 +218,7 @@ Os padrões marcados como `fraco` nas tabelas são **sinais fracos**: reportam `
 |--------|---------|--------|
 | **path_traversal** | Escape **multinível** `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, bypass por codificação de URL `%2e%2e`/`..%2f`/`..%5c`, wrappers de protocolo `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncamento com byte nulo `%00`; `fraco`: um `../`/`..\` de um único nível (idêntico a um caminho relativo em código ou documentação) | Critical |
 | **upload** | Tags PHP `<?php`/`<?=`, tags ASP `<%@`/`<%=`, padrões de backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobais `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, bypass de codificação `base64_decode()` | Critical |
-| **data_leak** | PAN de cartão de crédito de 16 dígitos (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, cabeçalho de chave privada PEM `-----BEGIN`, API Keys OpenAI/LLM `sk-...`, strings de conexão de banco `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**precisam de userinfo `@`**: `mysql://root:secret@db` é reportado; `redis://shared-memory` e `postgres://localhost:5432/app` são configuração comum e **não** são reportados), `jdbc:` (sem essa restrição), tokens JWT | Critical |
+| **data_leak** | PAN de cartão de crédito de 16 dígitos (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, cabeçalho de chave privada PEM `-----BEGIN`, API Keys OpenAI/LLM `sk-...`, strings de conexão de banco `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**precisam de userinfo `@`**: `mysql://root:secret@db` é reportado; `redis://shared-memory` e `postgres://localhost:5432/app` são configuração comum e **não** são reportados), `jdbc:` (sem essa restrição) | Critical |
 
 ---
 
@@ -232,7 +232,7 @@ Seu critério é «aparece um endereço interno no cabeçalho `Host:`» — e es
 
 ### Esta Biblioteca Não Consegue Escanear o Próprio Código-Fonte, os Próprios Testes nem a Própria Documentação
 
-O teto do escâner de assinaturas: medido neste repositório, 78 de 298 arquivos cruzam a linha de rejeição, e todos eles contêm strings de ataque **por construção**: cargas de teste, os próprios literais de expressão regular do código dos detectores e as tabelas de README/OWASP que nomeiam esses padrões. Um README não é defeituoso por listar `(a+)+`. Para escanear os próprios artefatos é preciso excluir antes esse corpus, ou escolher outro critério.
+O teto do escâner de assinaturas: alimentando cada arquivo de texto UTF-8 sob a raiz do repositório (pulando `target/` e `.git/`) no `Scanner`, 85 de 383 arquivos cruzam a linha de rejeição, e todos eles contêm strings de ataque **por construção**: cargas de teste, os próprios literais de expressão regular do código dos detectores e as tabelas de README/OWASP que nomeiam esses padrões. Um README não é defeituoso por listar `(a+)+`. Para escanear os próprios artefatos é preciso excluir antes esse corpus, ou escolher outro critério.
 
 ### `upload` Reporta `<%@` / `<?php` como Critical Onde Aparecerem
 
@@ -295,7 +295,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Sinal fraco: o token apenas aparece ⇒ sempre Low, não cruza a linha de rejeição sozinho
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (o espaço final faz parte do padrão)
 ```
 
 A pontuação de risco transforma a lista de acertos em um único nível, para que vários sinais de baixa gravidade não sejam ignorados em silêncio:
@@ -372,7 +372,7 @@ let _ = throttle.record_failure(key, now);
 # Compilar
 cargo build --release
 
-# Testes (580: 431 unitários + 148 de integração + 1 teste de documentação)
+# Testes (594: 445 unitários + 148 de integração + 1 teste de documentação)
 cargo test
 
 # Exemplo de pipeline ponta a ponta (varredura → limitação de taxa → sessão → ação)

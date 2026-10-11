@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 detectores de archivos
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 suites de integración: sesión, limitación, ciclo de vida, invariantes, robustez, extremo a extremo, limitación multiclave
+├── tests/                  8 suites de integración: sesión, limitación, ciclo de vida, invariantes, robustez, extremo a extremo, limitación multiclave, corpus del mundo real
 ├── examples/
 │   ├── waf.rs              Ejemplo de canal de extremo a extremo (escaneo → limitación → sesión → acción)
 │   └── axum_middleware.rs  Referencia de integración del middleware de axum
@@ -92,7 +92,7 @@ Esta librería se posiciona como un **escáner de entrada puro**: recibe una cad
 
 ### Dos niveles: señales fuertes y débiles
 
-Un detector **no** reporta cada coincidencia con la severidad que declara. 18 de los 32 detectores reparten sus patrones en dos niveles (los estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` del código fuente):
+Un detector **no** reporta cada coincidencia con la severidad que declara. 18 de los 32 detectores tienen un nivel de señal débil (las coincidencias se reportan siempre con el `Severity::Low` fijo): 17 de ellos tienen ambos niveles — 15 los separan con los estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` del código fuente, mientras que `cors` / `hpp` deciden sus niveles con condiciones inline; el restante `dns_rebinding` es débil de principio a fin:
 
 | Nivel | Criterio | Severidad reportada | ¿Una sola coincidencia cruza la línea de rechazo? |
 |------|------|-----------|------------------|
@@ -186,10 +186,10 @@ Los patrones marcados como `débil` en las tablas son **señales débiles**: rep
 | Detector | Patrones cubiertos | Severidad |
 |--------|---------|--------|
 | **ssrf** | Metadatos de nube `169.254.169.254` y `metadata.google.internal` (sin contexto de URL), IPs internas en **posición de autoridad de URL** (tras `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, protocolos peligrosos `gopher://`/`dict://`/`ftp://user@`/`file:///`; `débil`: los mismos literales internos en **posición que no es URL** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` son idénticos byte a byte) | Critical |
-| **xxe** | Declaraciones de entidades `<!ENTITY`, referencias externas `SYSTEM`/`PUBLIC`, entidades de parámetro `%`, declaración DTD `<!DOCTYPE` | Critical |
+| **xxe** | `<!ENTITY` seguido de espacio en blanco (sin distinguir mayúsculas) — un solo patrón cubre todas las formas de declaración de entidades: referencias externas `SYSTEM`/`PUBLIC`, entidades de parámetro `%`; un `<!DOCTYPE` desnudo o `SYSTEM "…"`/`PUBLIC "…"` en prosa no son señal (aparecen por todas partes en documentos HTML / SVG normales y en texto corriente) | Critical |
 | **header_injection** | Cabeceras propias de la respuesta precedidas de `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, o `%0d` junto con `%0a` (también en orden inverso `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` son cabeceras de **petición**, idénticas byte a byte a las de cualquier petición bien formada, así que ya no son señal (la forma codificada `%0d%0aContent-Length:` sigue cubierta por `%0d`+`%0a`) | High |
 | **host_header** | **Dos** cabeceras `Host:` (la RFC 7230 §5.4 exige un 400, dos analizadores leen valores distintos); `débil`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — los proxies añaden esas cabeceras ellos mismos, idénticas byte a byte a una falsificación del cliente (`X-Forwarded-For`/`X-Forwarded-Proto` no se reportan en absoluto) | High |
-| **request_smuggling** | Cabeceras `Transfer-Encoding` duplicadas, contrabando `Content-Length: 0`, ofuscación de terminación chunked `\r\n0\r\n` | High |
+| **request_smuggling** | Cabeceras `Transfer-Encoding` repetidas (las dos capas de parser eligen valores distintos), o `Transfer-Encoding :` con espacio entre el nombre de la cabecera y los dos puntos (prohibido por RFC 7230 §3.2.4, pero un parser permisivo lo sigue leyendo como chunked); un `Transfer-Encoding: chunked` solitario es la forma normal de una petición con cuerpo chunked y **no** se reporta | High |
 | **open_redirect** | Saltos por protocolos pseudo `javascript:`/`data:text/html`/`data:text/plain` (esquema seguido de contenido); `débil`: URLs relativas al protocolo `//evil.com` — idénticas a los enlaces CDN de comentarios de código y documentación | Medium |
 | **cors** | `Access-Control-Allow-Origin: null` y `Access-Control-Allow-Origin: *` **junto con** `Access-Control-Allow-Credentials: true`; `débil`: `Origin: null` en la petición (los iframes en sandbox, las URLs `data:` y los archivos locales tienen exactamente ese origen — hace falta que un `ACAO: null` lo devuelva para que cuaje). Por separado ambos son normales en APIs públicas y recursos estáticos y no se reportan | Medium |
 | **websocket** | `Origin: null` junto con una actualización WebSocket (CSWSH), `ws://` hacia direcciones de loopback/privadas/link-local (incluido el endpoint de metadatos cloud `169.254.169.254`) | High |
@@ -215,7 +215,7 @@ Los patrones marcados como `débil` en las tablas son **señales débiles**: rep
 |--------|---------|--------|
 | **path_traversal** | Escape **multinivel** `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, bypass por codificación URL `%2e%2e`/`..%2f`/`..%5c`, wrappers de protocolo `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, truncamiento con byte nulo `%00`; `débil`: un `../`/`..\` de un solo nivel (idéntico a una ruta relativa en código o documentación) | Critical |
 | **upload** | Etiquetas PHP `<?php`/`<?=`, etiquetas ASP `<%@`/`<%=`, patrones de backdoor `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobales `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, bypass por `base64_decode()` | Critical |
-| **data_leak** | PAN de tarjetas de crédito de 16 dígitos (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, cabecera de claves privadas PEM `-----BEGIN`, API Keys OpenAI/LLM `sk-...`, cadenas de conexión a bases de datos `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**deben llevar userinfo `@`**: `mysql://root:secret@db` se reporta; `redis://shared-memory` y `postgres://localhost:5432/app` son configuración ordinaria y **no** se reportan), `jdbc:` (sin esa restricción), tokens JWT | Critical |
+| **data_leak** | PAN de tarjetas de crédito de 16 dígitos (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, cabecera de claves privadas PEM `-----BEGIN`, API Keys OpenAI/LLM `sk-...`, cadenas de conexión a bases de datos `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**deben llevar userinfo `@`**: `mysql://root:secret@db` se reporta; `redis://shared-memory` y `postgres://localhost:5432/app` son configuración ordinaria y **no** se reportan), `jdbc:` (sin esa restricción) | Critical |
 
 ---
 
@@ -229,7 +229,7 @@ Su criterio es «en la cabecera `Host:` aparece una dirección interna» — y e
 
 ### Esta librería no puede escanear su propio código fuente, sus pruebas ni su documentación
 
-El techo del escáner de firmas: medido sobre este repositorio, 78 de 298 archivos cruzan la línea de rechazo, y todos ellos contienen cadenas de ataque **por construcción**: cargas de prueba, los propios literales de expresión regular del código de los detectores y las tablas de README/OWASP que nombran esos patrones. Un README no es defectuoso por listar `(a+)+`. Escanear tus propios artefactos exige excluir antes ese corpus, o elegir otro criterio.
+El techo del escáner de firmas: pasando cada archivo de texto UTF-8 bajo la raíz del repositorio (omitiendo `target/` y `.git/`) al `Scanner`, 85 de 383 archivos cruzan la línea de rechazo, y todos ellos contienen cadenas de ataque **por construcción**: cargas de prueba, los propios literales de expresión regular del código de los detectores y las tablas de README/OWASP que nombran esos patrones. Un README no es defectuoso por listar `(a+)+`. Escanear tus propios artefactos exige excluir antes ese corpus, o elegir otro criterio.
 
 ### `upload` reporta `<%@` / `<?php` como Critical allí donde aparezcan
 
@@ -292,7 +292,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Señal débil: el token solo aparece ⇒ siempre Low, no cruza la línea de rechazo por sí sola
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (el espacio final forma parte del patrón)
 ```
 
 La evaluación de riesgo convierte la lista de coincidencias en un único nivel, para que las señales de baja gravedad acumuladas no pasen inadvertidas:
@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Compilar
 cargo build --release
 
-# Pruebas (580: 431 unitarias, 148 de integración, 1 de documentación)
+# Pruebas (594: 445 unitarias, 148 de integración, 1 de documentación)
 cargo test
 
 # Ejemplo de canal de extremo a extremo (escaneo → limitación → sesión → acción)

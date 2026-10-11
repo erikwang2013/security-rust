@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               파일 탐지기 3개
 │   ├── session/            SessionGuard + SessionStore(guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore(guard / store)
-├── tests/                  통합 테스트 7개 스위트: 세션, 속도 제한, 라이프사이클, 불변식, 견고성, 엔드투엔드, 다차원 속도 제한
+├── tests/                  통합 테스트 8개 스위트: 세션, 속도 제한, 라이프사이클, 불변식, 견고성, 엔드투엔드, 다차원 속도 제한, 실세계 코퍼스
 ├── examples/
 │   ├── waf.rs              엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)
 │   └── axum_middleware.rs  axum 미들웨어 연동 레퍼런스
@@ -95,7 +95,7 @@ security-rust/
 
 ### 2단계 판정: 강한 신호와 약한 신호
 
-탐지기는 **"적중하면 선언된 심각도로 보고한다"가 아닙니다**. 32개 탐지기 중 18개가 패턴을 두 단계로 나눕니다(소스의 `STRONG_PATTERNS` / `WEAK_PATTERNS`):
+탐지기는 **"적중하면 선언된 심각도로 보고한다"가 아닙니다**. 32개 탐지기 중 18개에 약한 신호 단계가 있습니다(적중 시 항상 고정 `Severity::Low`로 보고). 그중 17개는 강·약 두 단계를 모두 가지며 —— 15개는 소스의 `STRONG_PATTERNS` / `WEAK_PATTERNS` 두 정적 상수로 단계를 나누고, `cors` / `hpp`의 단계 판정은 인라인 조건입니다. 나머지 `dns_rebinding`은 전체 단계가 약합니다:
 
 | 단계 | 판정 기준 | 보고되는 심각도 | 단일 적중이 거부선을 넘는가 |
 |------|------|-----------|------------------|
@@ -192,10 +192,10 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 | 탐지기 | 커버 패턴 | 심각도 |
 |--------|---------|--------|
 | **ssrf** | `169.254.169.254` 클라우드 메타데이터와 `metadata.google.internal`(URL 문맥을 요구하지 않음), **URL authority 위치**(`//` 뒤)의 사설 IP `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, 위험 프로토콜 `gopher://`/`dict://`/`ftp://user@`/`file:///`; `약`: **URL이 아닌 위치**의 같은 사설 리터럴(`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}`은 바이트 단위로 동형) | Critical |
-| **xxe** | `<!ENTITY` 엔티티 선언, `SYSTEM`/`PUBLIC` 외부 참조, `%` 파라미터 엔티티, `<!DOCTYPE` DTD 선언 | Critical |
+| **xxe** | `<!ENTITY` 뒤의 공백(대소문자 무관) —— 패턴 하나로 모든 엔티티 선언 형태를 커버: `SYSTEM`/`PUBLIC` 외부 참조, `%` 파라미터 엔티티. 맨 `<!DOCTYPE`이나 산문 속 `SYSTEM "…"`/`PUBLIC "…"`은 신호가 아니다(일반 HTML / SVG 문서와 평범한 텍스트에 널려 있다) | Critical |
 | **header_injection** | 응답 전용 헤더 앞의 `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, `%0d`와 `%0a`의 동시 출현(역순 `%0a…%0d` 포함). `Content-Length`/`Content-Type`/`Transfer-Encoding`은 **요청** 헤더로, 정상 메시지의 모든 헤더와 바이트 단위로 동형이므로 더 이상 신호가 아니다(인코딩 형태 `%0d%0aContent-Length:`는 여전히 `%0d`+`%0a`가 잡는다) | High |
 | **host_header** | **두 개**의 `Host:` 헤더(RFC 7230 §5.4는 일괄 400을 요구한다. 두 계층 파서의 해석이 갈린다); `약`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` —— 프록시 자신도 붙이는 헤더로, 클라이언트 위조와 바이트 단위로 같다(`X-Forwarded-For`/`X-Forwarded-Proto`는 보고하지 않는다) | High |
-| **request_smuggling** | 이중 `Transfer-Encoding` 헤더, `Content-Length: 0` 스머글링, `\r\n0\r\n` chunked 종료 난독화 | High |
+| **request_smuggling** | 중복된 `Transfer-Encoding` 헤더(두 계층 파서가 서로 다른 값을 고른다), 또는 헤더 이름과 콜론 사이에 공백을 넣은 `Transfer-Encoding :`(RFC 7230 §3.2.4가 금지하지만 관대한 파서는 chunked로 해석한다). 단독 `Transfer-Encoding: chunked`는 chunked 본문을 가진 정상 요청의 표기이며 **보고하지 않는다** | High |
 | **open_redirect** | `javascript:`/`data:text/html`/`data:text/plain` 의사 프로토콜 점프(scheme 뒤에 내용을 요구); `약`: `//evil.com` 프로토콜 상대 URL —— 소스 주석과 문서 안의 CDN 링크와 동형 | Medium |
 | **cors** | `Access-Control-Allow-Origin: null`, 그리고 `Access-Control-Allow-Origin: *`와 `Access-Control-Allow-Credentials: true`의 **동시 출현**; `약`: 요청 측 `Origin: null`(샌드박스 iframe, `data:` URL, 로컬 파일의 오리진이 `null`이며, 서버가 `ACAO: null`로 되돌려줘야 성립한다). 단독으로는 공개 API와 정적 자산에서 정상이므로 보고하지 않는다 | Medium |
 | **websocket** | `Origin: null` 과 WebSocket 업그레이드의 동시 출현(CSWSH), `ws://` 가 루프백/사설/링크 로컬 주소를 가리키는 경우(클라우드 메타데이터 엔드포인트 `169.254.169.254` 포함) | High |
@@ -221,7 +221,7 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 |--------|---------|--------|
 | **path_traversal** | **다단계** 상향 이동 `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, `%2e%2e`/`..%2f`/`..%5c` URL 인코딩 우회, `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://` 프로토콜 래퍼, `%00` 널 바이트 종료; `약`: 단일 단계 `../`/`..\`(모든 소스에 있는 상대 경로와 동형) | Critical |
 | **upload** | `<?php`/`<?=` PHP 태그, `<%@`/`<%=` ASP 태그, `eval($_`/`system($_`/`exec($_`/`passthru($_` 백도어 패턴, `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER` 슈퍼글로벌, `base64_decode()` 인코딩 우회 | Critical |
-| **data_leak** | 16자리 신용카드 PAN(Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, PEM 개인키 헤더 `-----BEGIN`, OpenAI/LLM API Key `sk-...`, DB 연결 문자열 `mongodb://`/`mysql://`/`postgresql://`/`redis://`(**`@`가 있는 userinfo 필수**: `mysql://root:secret@db`는 보고하고, `redis://shared-memory`, `postgres://localhost:5432/app` 같은 설정 관행은 **보고하지 않는다**), `jdbc:`(이 제약 없음), JWT 토큰 | Critical |
+| **data_leak** | 16자리 신용카드 PAN(Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Key `AKIA...`, PEM 개인키 헤더 `-----BEGIN`, OpenAI/LLM API Key `sk-...`, DB 연결 문자열 `mongodb://`/`mysql://`/`postgresql://`/`redis://`(**`@`가 있는 userinfo 필수**: `mysql://root:secret@db`는 보고하고, `redis://shared-memory`, `postgres://localhost:5432/app` 같은 설정 관행은 **보고하지 않는다**), `jdbc:`(이 제약 없음) | Critical |
 
 ---
 
@@ -235,7 +235,7 @@ let a = scanner.assess("<script src=\"/app.js\"></script>\n../config\n__proto__"
 
 ### 이 라이브러리는 자기 소스·테스트·문서를 스캔할 수 없다
 
-시그니처 스캐너의 천장: 실측으로 이 저장소의 298개 파일 중 78개가 거부선을 넘는데, 그 모두가 **구조상** 공격 문자열을 담고 있다 —— 테스트 페이로드, 탐지기 소스 자체의 정규식 리터럴, 그리고 이 패턴들을 나열하는 README와 OWASP 표다. README는 `(a+)+`를 적었다고 해서 결함이 되지 않는다. 자기 산출물을 스캔하려면 먼저 이 코퍼스를 제외하거나 다른 판정 기준으로 바꿔야 한다.
+시그니처 스캐너의 천장: 저장소 루트 아래 모든 UTF-8 텍스트 파일(`target/`와 `.git/` 제외)을 `Scanner`에 넣어 실측한 결과 383개 파일 중 85개가 거부선을 넘는데, 그 모두가 **구조상** 공격 문자열을 담고 있다 —— 테스트 페이로드, 탐지기 소스 자체의 정규식 리터럴, 그리고 이 패턴들을 나열하는 README와 OWASP 표다. README는 `(a+)+`를 적었다고 해서 결함이 되지 않는다. 자기 산출물을 스캔하려면 먼저 이 코퍼스를 제외하거나 다른 판정 기준으로 바꿔야 한다.
 
 ### `upload`는 `<%@` / `<?php`를 일괄 Critical로 보고한다
 
@@ -281,7 +281,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // 약한 신호: 토큰이 출현했을 뿐 ⇒ 항상 Low, 단독으로는 거부선을 넘지 못한다("2단계 판정" 참고)
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (끝의 공백도 패턴에 포함된다)
 ```
 
 위험 스코어링은 적중 목록을 하나의 등급으로 모아, 여러 저위험 신호가 조용히 무시되지 않게 한다:
@@ -357,7 +357,7 @@ let _ = throttle.record_failure(key, now);
 # 빌드
 cargo build --release
 
-# 테스트(580개: 유닛 431 + 통합 148 + 문서 테스트 1)
+# 테스트(594개: 유닛 445 + 통합 148 + 문서 테스트 1)
 cargo test
 
 # 엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)

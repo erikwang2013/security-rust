@@ -37,7 +37,7 @@ pub struct DetectionResult {
 
 ## Dos niveles: señales fuertes y débiles
 
-18 de los 32 detectores reparten sus patrones en dos niveles (los estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` del código fuente). La estructura de campos de `DetectionResult` no cambia; lo que cambia es el valor de `severity`:
+18 de los 32 detectores tienen un nivel de señal débil (las coincidencias se reportan siempre con el `Severity::Low` fijo). 17 de ellos tienen ambos niveles — 15 los separan con los dos estáticos `STRONG_PATTERNS` / `WEAK_PATTERNS` del código fuente, el nivel fuerte de `cors` / `hpp` es una condición inline; el restante `dns_rebinding` es débil de principio a fin. La estructura de campos de `DetectionResult` no cambia; lo que cambia es el valor de `severity`:
 
 | Nivel | Criterio | `severity` | ¿Una sola coincidencia cruza la línea de rechazo? |
 |------|------|-----------|------------------|
@@ -94,7 +94,7 @@ fn main() {
 
     // Una señal débil usa el mismo detector y el mismo attack_type, pero reporta Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (el espacio final forma parte del patrón)
 }
 ```
 
@@ -234,7 +234,7 @@ Su criterio es «en la cabecera `Host:` aparece una dirección interna» — y e
 
 ### Esta librería no puede escanear su propio código fuente, sus pruebas ni su documentación
 
-El techo del escáner de firmas: medido sobre este repositorio, 78 de 298 archivos cruzan la línea de rechazo, y todos ellos contienen cadenas de ataque **por construcción**: cargas de prueba, los propios literales de expresión regular del código de los detectores y las tablas de README/OWASP que nombran esos patrones. Un README no es defectuoso por listar `(a+)+`. Escanear tus propios artefactos exige excluir antes ese corpus, o elegir otro criterio.
+El techo del escáner de firmas: pasando cada archivo de texto UTF-8 bajo la raíz del repositorio (omitiendo `target/` y `.git/`) al `Scanner`, 85 de 383 archivos cruzan la línea de rechazo, y todos ellos contienen cadenas de ataque **por construcción**: cargas de prueba, los propios literales de expresión regular del código de los detectores y las tablas de README/OWASP que nombran esos patrones. Un README no es defectuoso por listar `(a+)+`. Escanear tus propios artefactos exige excluir antes ese corpus, o elegir otro criterio.
 
 ### `upload` reporta `<%@` / `<?php` como Critical allí donde aparezcan
 

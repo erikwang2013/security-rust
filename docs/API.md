@@ -6,6 +6,8 @@
 
 ---
 
+crate 级属性：`#![forbid(unsafe_code)]`（`src/lib.rs`）—— 本库至今零 `unsafe`，且已升级为编译期强制：新增一句 `unsafe` 会直接编译失败。
+
 ## 核心 Trait
 
 ### `Detector`
@@ -19,8 +21,8 @@ pub trait Detector: Send + Sync {
 }
 ```
 
-- `name()` — 检测器名称（如 `"xss"`、`"sql_injection"`）
-- `detect()` — 扫描输入，命中则返回 `Some(DetectionResult)`，未命中返回 `None`
+- `name()` — 检测器名称（如 `"xss"`、`"sql_injection"`）。契约：非空、snake_case、全局唯一，同一实例恒定，且等于结果里的 `attack_type`（`tests/invariants.rs` 对全部内置实现逐个核验）
+- `detect()` — 扫描输入，命中则返回 `Some(DetectionResult)`，未命中返回 `None`，**至多一条**结果；`offset` 是输入的 **UTF-8 字节**偏移（不是字符数），`matched_pattern` 恰好等于 `&input[offset..offset + matched_pattern.len()]`（即命中片段本身）
 
 `Detector` 只覆盖 32 个检测器。`session` / `throttle` **不实现**该 trait：它们是**有状态、身份相关**的，要读写的输入是「token + 指纹 + 位置 + 时间」这类复合值，还要访问存储后端，`detect(&str)` 表达不了。它们各自提供显式 API（见下文），也不在 `Scanner` 的装配范围内。
 
@@ -39,7 +41,7 @@ pub struct DetectionResult {
 
 ## 两档信号：强信号与弱信号
 
-32 个检测器里有 18 个把模式分成两档（源码里的 `STRONG_PATTERNS` / `WEAK_PATTERNS`）。`DetectionResult` 的字段结构没变，变的是 `severity` 的取值：
+32 个检测器里有 18 个存在弱信号档（命中一律上报固定 `Severity::Low`）。其中 17 个同时有强档与弱档 —— 15 个用源码里的 `STRONG_PATTERNS` / `WEAK_PATTERNS` 两个静态常量分档，`cors` / `hpp` 的强档是内联的条件判定；剩下 `dns_rebinding` 全档皆弱（见「已知上限」）。`DetectionResult` 的字段结构没变，变的是 `severity` 的取值：
 
 | 档位 | 判据 | `severity` | 单条能否越过拒绝线 |
 |------|------|-----------|------------------|
@@ -49,6 +51,8 @@ pub struct DetectionResult {
 同一个检测器、同一个 `attack_type`，只有 `severity` 不同；`detect()` 先试强档，强档不中再试弱档，因此**每个检测器最多返回一条**结果。弱信号仍然被检出，不会静默漏报。
 
 `DetectionResult` 本身不区分档位 —— 想知道一条命中是强是弱，看 `severity == Severity::Low` 即可（弱档是唯一会上报 `Low` 的来源）。参考流水线的拒绝线是 40 分（`risk.level >= RiskLevel::High`，见 [`examples/waf.rs:166`](../examples/waf.rs)），单条弱信号只有 5 分，进不了这一支。
+
+`Severity` 与 `AttackCategory` 实现了 `Copy`（两个小枚举，取值直接拷贝，不必 `clone()`）；`DetectionResult` 本身不是 `Copy`（持有 `String` 字段）。
 
 要看穿弱信号背后的攻击，靠的是 `assess()` 把多个检测器的命中叠起来：
 
@@ -96,7 +100,7 @@ fn main() {
 
     // 弱信号走同一个检测器、同一个 attack_type，只是 severity 为 Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script （含末尾空格）
 }
 ```
 
@@ -123,6 +127,16 @@ let scanner = Scanner::builder()
     .with_detector(Box::new(SqlInjectionDetector))
     .build();
 ```
+
+`Scanner::builder()` **从空表起步**：一个检测器都不装也能 `build()` 成功，得到一个恒返回空结果的 scanner（这是行为不是错误，静默）。装配后先用 `Scanner::detector_names()` 自检：
+
+```rust
+// 按注册顺序列出检测器名字（`'static` 字面量，收集后可脱离 scanner 保存）
+let names: Vec<&str> = scanner.detector_names().collect();
+assert_eq!(names, ["xss", "sql_injection"]);
+```
+
+`scan` / `assess` / `scan_with` 与 builder 的 `with_detector` 都标了 `#[must_use]`（`score` 模块的 `total` / `score` / `assess` 同样如此）—— 丢掉扫描结果等于静默放行，编译器会替你把这一条提示出来。`scan_with` 名单里的**未知名字静默跳过**（拼错一个名字只会少扫一个检测器，不会报错），重复名字也不会让检测器跑两遍。
 
 ### 风险评分
 
@@ -182,6 +196,17 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 
 `session` / `throttle` / `score` 的类型都从 crate 根 re-export（如 `use security_rust::{RiskLevel, SessionGuard, Throttle}`），也可走模块路径（如 `use security_rust::session::MemoryStore`）。两个例外：`score` 模块的 `score` / `total` 函数只从模块路径可达（`security_rust::score::score`），crate 根 re-export 的是 `assess`。
 
+## 枚举的演进策略（semver）
+
+库里的枚举分两类，对下游的兼容承诺不同，升级前先看这里：
+
+| 类别 | 枚举 | 承诺 |
+|------|------|------|
+| **封口（sealed）** | `SessionThreat`、`SessionError`、`StoreError` | 已标 `#[non_exhaustive]`：下游 `match` **必须**带 `_` 兜底臂（否则编译错误）。检测面 / 故障面扩大时新增变体只会落进兜底臂，属 **minor** 版本 |
+| **封闭（closed）** | `Severity`、`AttackCategory`、`RiskLevel`、`Decision`、`ThrottleDecision`、`ThrottleOutcome` | 语义是固定的分档 / 处置集合，不随检测能力增长：minor 版本**不会**新增变体，真要新增属 breaking change（major）。这些枚举可以放心穷举 `match`，不必写 `_` 臂 |
+
+规则很直接：**随「检测到什么」增长的枚举封口，固定分档的枚举封闭。** 判定结果是封闭的 —— 「允许 / 挑战 / 拒绝」是处置动作的完整枚举，不会因为多了检测器就多一档。
+
 ## Session 会话安全
 
 会话级威胁检测：客户端劫持（指纹不符）、数据篡改（签名不符）、异地登录 / 不可能旅行、token 过期与吊销。
@@ -196,10 +221,10 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 | `Decision` | `Allow` < `Challenge` < `Block`（声明顺序即严格度顺序） |
 | `SessionThreat` | 11 种威胁，各自映射固定的 `severity()` 与 `decision()` |
 | `SessionConfig` | 校准旋钮：`ttl_secs` = 3600、`impossible_travel_kmh` = 900.0、`timestamp_skew_secs` = 300 |
-| `SessionStore` | 存储抽象 trait，多实例部署实现它接 Redis 即可 |
+| `SessionStore` | 存储抽象 trait，多实例部署实现它接 Redis 即可。`SessionGuard` **按值**持有 store，没有 `Arc<S>` 的 blanket 实现（`Arc<MemoryStore>` 不是 `SessionStore`）：两个 guard 共享一份 store 需要自己写转发全部方法的 newtype；多线程场景更推荐共享一个 `Arc<SessionGuard<S>>` |
 | `MemoryStore` | 内置内存后端（`Mutex<HashMap>`，无后台线程） |
 | `SessionRecord` / `LoginPoint` | 会话记录 / 登录位置快照 |
-| `SessionError` / `StoreError` | 调用方误用 / 存储后端故障 |
+| `SessionError` / `StoreError` | 调用方误用 / 存储后端故障（两者均已封口，见「枚举的演进策略」）。分裂规则：校验调用方输入、产出安全结论的方法（`bind` / `rotate`）返回 `SessionError`；纯转发存储操作的 `revoke` / `revoke_all` / `purge_expired` 原样透传 `StoreError`。`TokenInUse` 的 Display 文本为 `new token is already in use` |
 
 ### 方法
 
@@ -223,7 +248,7 @@ impl<S: SessionStore> SessionGuard<S> {
 | `verify` | 每请求校验，返回处置建议 |
 | `revoke` | 吊销单个会话（登出） |
 | `revoke_all` | 吊销某 subject 的全部会话（改密码 / 踢下线），返回受影响条数 |
-| `rotate` | 续期换 token：旧 token 立即失效，新 token 由调用方提供 |
+| `rotate` | 续期换 token：旧 token 立即失效，新 token 由调用方提供。`new` 必须是**未在用**的 token（不存在 / 已过期 / 已吊销均可覆盖），否则返回 `SessionError::TokenInUse` |
 | `purge_expired` | 清除过期会话与休眠 subject 的登录历史。**返回值只计会话条数**，不含被回收的登录历史 |
 
 ### 最小示例
@@ -256,9 +281,11 @@ assert_eq!(verdict.decision, Decision::Block);
 - **`severity` 是 `Option<Severity>`，放行为 `None`** — 没有威胁就是没有严重度，由类型说明。不要用某个低危值占位：占位值在日志里跟「发现了一条低危」长得一模一样，一条完全放行的正常请求会被读成有发现。
 - **`RequestContext.subject` 仅 `bind` 使用，`verify` 完全忽略它** — 每请求校验的身份一律取自服务端 `SessionRecord`（异地历史按 `record.subject` 聚合），**请求方提供的 subject 不可信**。因此中间件里传 `subject: ""` 是合法的（`bind` 才要求非空）。**绝不要**把请求头里的用户标识填进来当身份：现在它进不了判定，将来重构未必。
 - **fail-closed** — 存储后端故障时返回 `SessionThreat::StoreUnavailable` ⇒ `Block`，绝不放行。放行所有请求是一个可被攻击者主动触发的绕过。
+- **`verify` 的三步是三次独立锁获取，不原子（有意为之）** — `get` → `recent_logins` → `touch` 之间可能并发 `revoke` / `purge_expired`：竞争只会产生过期观测（`touch` 落在刚被吊销 / 回收的记录上是空操作，历史可能差一条），**不构成绕过** —— 每一步判定消费的是自己的克隆快照。要消除窗口需要存储 trait 提供「单次组合操作」原语。
 - **`verify` 返回 `SessionVerdict` 而非 `Result`** — 认证路径上「拒绝」是正常结果而非错误，强制调用方在类型层面处理每一种拒绝。只有 `bind` / `rotate` 会因调用方误用或后端故障返回 `Result`。
 - **只有放行才刷新活跃度** — 被拦的请求不会延长会话寿命。
 - **`rotate` 绑定指纹** — 旧会话必须存在、未吊销、未过期，且指纹与本次 `ctx` 相符，否则返回 `UnknownSession`；新记录的身份字段（`subject` / `location` / `coords` / `signature`）一律以服务端记录为准，不接受 `ctx` 覆盖。
+- **`rotate` 要求 `new` 未被占用** — 目标 token 指向一个在用会话（未吊销且未过期）时返回 `SessionError::TokenInUse`，且**零副作用**（失败的 rotate 不写任何记录、不吊销旧会话）。store 的写入是无条件覆盖，不挡这一下，攻击者就能拿自己的会话把受害者的记录整个盖掉 —— 受害者下次校验读到的是攻击者的指纹，被被动踢下线。`new == old` 同样按 `TokenInUse` 拒绝（既要吊销 old 又要 new 可用，语义自相矛盾）；已吊销 / 已过期的死记录可以覆盖。查 `new` 与随后的写入之间不原子：两个并发 `rotate` 抢同一个新 token 仍可能互相覆盖（需要攻击者猜到对方的新 token 并卡进窄窗）。
 - **指纹与签名用常数时间比较** — 直接 `==` 会在首个不同字节处提前返回，泄露「前 N 个字节猜对了」的时序信息。
 - **缺失即不判定** — 位置、坐标、时间任一缺失时不产生对应威胁，避免误报；坐标在信任边界清洗，非有限值 / 越界一律视为「没有坐标」。
 - **`now` 由调用方传入** — 全部时间参数都是 unix 秒，调用方须保证单调不减。
@@ -337,7 +364,7 @@ match throttle.record_failure(key, now) {
 - **key 由调用方构造** — 约定形如 `"ip:1.2.3.4"` 或 `"acct:u-1"`；两类前缀不同，天然互不干扰，可同时启用。不要把用户输入原样当 key：攻击者每次换一个值就能把自己拆成无限多个桶；空 key 同理。调用方须先规范化（截断长度、统一大小写、限制字符集）并保证非空。
 - **`record_success` 只清计数、保留封禁** — 「凭据正确 ⇒ 顺手解封」只对 `acct:` 桶成立；对 `ip:` 这类共享桶，换成 `reset` 意味着桶里任意另一个用户认证成功就能替爆破者解封。代价是账户桶下被爆破牵连的用户即使立刻输对密码也要等满 `ban_secs`。
 - **`record_failure` 的计数与封禁不原子** — 两次独立的存储写入之间并发一次 `reset` 是可能的，结果是刚认证成功的用户又被封上（可用性问题，不构成绕过）。
-- **内存后端的条目数无上限** — `MemoryThrottleStore` 的每个 key 失败列表有界，但 map 条目只增不减。长期运行的进程应按 `window_secs` 量级的间隔定时调用 `purge_expired`。
+- **内存后端：map 条目数无上限，单 key 失败记录有硬上限** — `MemoryThrottleStore` 每个 key 保留的失败记录上限为 `min(窗口内失败数, 1024)`。1024 是硬上限，挡住时钟冻结 / 回拨时（没有任何失败滑出窗口）向量的无界增长：计数在饱和值停住。**阈值 ≤ 1024 的配置（默认 5）判定逐字不变**，只有把 `threshold` 配到 1024 以上才会观察到计数封顶、永不触发封禁。map 条目数仍无上限（key 只增不减），长期运行的进程应按 `window_secs` 量级的间隔定时调用 `purge_expired`。
 
 ## Score 风险评分
 
@@ -415,7 +442,7 @@ assert_eq!(a.level, RiskLevel::Critical);
 
 ### 这个库扫不动自己的源码、测试和文档
 
-签名扫描器的天花板：实测本仓库 298 个文件里有 78 个越过拒绝线，而它们**按构造**全都含有攻击串 —— 测试载荷、检测器源码里的正则字面量自身，以及列出这些模式的 README 与 OWASP 表格。一份 README 不会因为写了 `(a+)+` 而变成缺陷。要扫自己的产物，得先把这些语料排除，或者换一个判据。
+签名扫描器的天花板：把仓库目录下所有 UTF-8 文本文件（跳过 `target/` 与 `.git/`）逐个喂给 `Scanner`，实测 383 个文件里有 85 个越过拒绝线，而它们**按构造**全都含有攻击串 —— 测试载荷、检测器源码里的正则字面量自身，以及列出这些模式的 README 与 OWASP 表格。一份 README 不会因为写了 `(a+)+` 而变成缺陷。要扫自己的产物，得先把这些语料排除，或者换一个判据。
 
 ### `upload` 一律把 `<%@` / `<?php` 报为 Critical
 

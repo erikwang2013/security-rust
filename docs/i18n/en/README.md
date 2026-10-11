@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 file detectors
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 integration suites: session, throttle, lifecycle, invariants, robustness, end-to-end, multi-key throttle
+├── tests/                  8 integration suites: session, throttle, lifecycle, invariants, robustness, end-to-end, multi-key throttle, real-world corpus
 ├── examples/
 │   ├── waf.rs              End-to-end pipeline (scan → throttle → session → action)
 │   └── axum_middleware.rs  axum middleware integration reference
@@ -97,7 +97,7 @@ The zero-dependency constraint shapes the stateful modules too: tokens, signatur
 
 ### Two Tiers: Strong and Weak Signals
 
-A detector does **not** report every hit at its declared severity. 18 of the 32 detectors split their patterns into two tiers (the `STRONG_PATTERNS` / `WEAK_PATTERNS` statics in the source):
+A detector does **not** report every hit at its declared severity. 18 of the 32 detectors have a weak-signal tier (hits are always reported at the fixed `Severity::Low`): 17 of them carry both tiers — 15 split them with the `STRONG_PATTERNS` / `WEAK_PATTERNS` statics in the source, while `cors` / `hpp` decide their tiers with inline conditions; the remaining `dns_rebinding` is weak all the way:
 
 | Tier | Test | Reported severity | Can a single hit cross the reject line? |
 |------|------|-------------------|----------------------------------------|
@@ -194,10 +194,10 @@ Patterns marked `weak` report `Severity::Low` (5 points) and cannot cross the re
 | Detector | Covered Patterns | Severity |
 |--------|---------|--------|
 | **ssrf** | `169.254.169.254` cloud metadata and `metadata.google.internal` (no URL context required), private IPs in **URL authority position** (after `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, dangerous protocols `gopher://`/`dict://`/`ftp://user@`/`file:///`; `weak`: the same private literals in **non-URL** positions (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` are byte-identical) | Critical |
-| **xxe** | `<!ENTITY` entity declarations, `SYSTEM`/`PUBLIC` external references, `%` parameter entities, `<!DOCTYPE` DTD declarations | Critical |
+| **xxe** | `<!ENTITY` followed by whitespace (case-insensitive) — one pattern covering every entity-declaration form: `SYSTEM`/`PUBLIC` external references, `%` parameter entities; a bare `<!DOCTYPE` or `SYSTEM "…"`/`PUBLIC "…"` in prose is not a signal (they are everywhere in ordinary HTML / SVG documents and plain text) | Critical |
 | **header_injection** | Response-only headers preceded by `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, or `%0d` together with `%0a` (including reversed `%0a...%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` are **request** headers, byte-identical to the header of any well-formed request, so they are no longer signals (the encoded form `%0d%0aContent-Length:` is still covered by `%0d`+`%0a`) | High |
 | **host_header** | **Two** `Host:` headers (RFC 7230 §5.4 mandates a 400, two parsers disagree); `weak`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — proxies add these themselves, byte-identical to client forgery (`X-Forwarded-For`/`X-Forwarded-Proto` are not reported at all) | High |
-| **request_smuggling** | Duplicate `Transfer-Encoding` headers, `Content-Length: 0` smuggling, `\r\n0\r\n` chunked termination obfuscation | High |
+| **request_smuggling** | Repeated `Transfer-Encoding` headers (the two parser layers disagree on the value), or `Transfer-Encoding :` with whitespace between the header name and the colon (forbidden by RFC 7230 §3.2.4, yet a lenient parser still reads it as chunked); a lone `Transfer-Encoding: chunked` is the ordinary spelling of a request with a chunked body and is **not** reported | High |
 | **open_redirect** | Pseudo-protocol redirects via `javascript:`/`data:text/html`/`data:text/plain` (scheme followed by content); `weak`: protocol-relative URLs `//evil.com` — identical to CDN links in source comments and docs | Medium |
 | **cors** | `Access-Control-Allow-Origin: null`, and `Access-Control-Allow-Origin: *` **together with** `Access-Control-Allow-Credentials: true`; `weak`: request-side `Origin: null` (sandboxed iframes, `data:` URLs and local files have that origin — it needs an `ACAO: null` echo to hold). Either one alone is normal for public APIs and static assets and is not reported | Medium |
 | **websocket** | `Origin: null` co-occurring with a WebSocket upgrade (CSWSH), `ws://` targeting loopback / private / link-local addresses (including the cloud metadata endpoint `169.254.169.254`) | High |
@@ -223,7 +223,7 @@ Patterns marked `weak` report `Severity::Low` (5 points) and cannot cross the re
 |--------|---------|--------|
 | **path_traversal** | **Multi-level** traversal `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, URL-encoded bypass `%2e%2e`/`..%2f`/`..%5c`, protocol wrappers `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, null-byte truncation `%00`; `weak`: a single-level `../`/`..\` (identical to a relative path in source or docs) | Critical |
 | **upload** | PHP tags `<?php`/`<?=`, ASP tags `<%@`/`<%=`, backdoor patterns `eval($_`/`system($_`/`exec($_`/`passthru($_`, superglobals `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, encoding bypass via `base64_decode()` | Critical |
-| **data_leak** | 16-digit credit card PANs (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM private key headers `-----BEGIN`, OpenAI/LLM API Keys `sk-...`, database connection strings `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**must carry `@` userinfo**: `mysql://root:secret@db` is reported, `redis://shared-memory` and `postgres://localhost:5432/app` are ordinary config and are **not**), `jdbc:` (no such constraint), JWT tokens | Critical |
+| **data_leak** | 16-digit credit card PANs (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM private key headers `-----BEGIN`, OpenAI/LLM API Keys `sk-...`, database connection strings `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**must carry `@` userinfo**: `mysql://root:secret@db` is reported, `redis://shared-memory` and `postgres://localhost:5432/app` are ordinary config and are **not**), `jdbc:` (no such constraint) | Critical |
 
 ---
 
@@ -237,7 +237,7 @@ Its test is "an internal address appears in `Host:`" — and that same shape is 
 
 ### This crate cannot scan its own source, tests, or docs
 
-The signature scanner's ceiling: measured over this repository, 78 of 298 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
+The signature scanner's ceiling: feeding every UTF-8 text file under the repo root (skipping `target/` and `.git/`) to `Scanner`, 85 of 383 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
 
 ### `upload` reports `<%@` / `<?php` as Critical wherever they appear
 
@@ -284,7 +284,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Weak signal: the token merely appears ⇒ always Low, cannot cross the reject line alone
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (the trailing space is part of the pattern)
 ```
 
 Risk scoring turns the hit list into a single level, so stacked low-severity signals are not silently ignored:
@@ -372,7 +372,7 @@ See the [API Reference](./API.md) for the complete API documentation (installati
 # Build
 cargo build --release
 
-# Tests (580: 431 unit + 148 integration + 1 doc test)
+# Tests (594: 445 unit + 148 integration + 1 doc test)
 cargo test
 
 # End-to-end pipeline example (scan → throttle → session → action)

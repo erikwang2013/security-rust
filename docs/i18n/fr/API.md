@@ -37,7 +37,7 @@ pub struct DetectionResult {
 
 ## Deux niveaux : signaux forts et signaux faibles
 
-18 des 32 détecteurs répartissent leurs motifs en deux niveaux (les statiques `STRONG_PATTERNS` / `WEAK_PATTERNS` du code source). La structure de `DetectionResult` ne change pas ; c'est la valeur de `severity` qui change :
+18 des 32 détecteurs ont un niveau de signal faible (les correspondances sont toujours signalées avec le `Severity::Low` fixe). 17 d'entre eux portent les deux niveaux — 15 les séparent avec les deux statiques `STRONG_PATTERNS` / `WEAK_PATTERNS` du code source, le niveau fort de `cors` / `hpp` est une condition inline ; le dernier, `dns_rebinding`, est faible de bout en bout. La structure de `DetectionResult` ne change pas ; c'est la valeur de `severity` qui change :
 
 | Niveau | Critère | `severity` | Une correspondance isolée franchit-elle le seuil de rejet ? |
 |------|------|-----------|------------------|
@@ -94,7 +94,7 @@ fn main() {
 
     // Un signal faible passe par le même détecteur et le même attack_type, mais signale Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (l'espace final fait partie du motif)
 }
 ```
 
@@ -234,7 +234,7 @@ Son critère est « une adresse interne apparaît dans `Host:` » — et cette m
 
 ### Cette bibliothèque ne peut pas analyser son propre code source, ses tests ni sa documentation
 
-Le plafond d'un scanner à signatures : mesuré sur ce dépôt, 78 fichiers sur 298 franchissent le seuil de rejet, et ils contiennent tous des chaînes d'attaque **par construction** — charges de test, littéraux d'expression régulière du code des détecteurs eux-mêmes, et tableaux README/OWASP qui nomment ces motifs. Un README n'est pas défectueux parce qu'il liste `(a+)+`. Analyser ses propres artefacts suppose d'exclure d'abord ce corpus — ou de choisir un autre critère.
+Le plafond d'un scanner à signatures : en passant chaque fichier texte UTF-8 sous la racine du dépôt (en sautant `target/` et `.git/`) au `Scanner`, 85 fichiers sur 383 franchissent le seuil de rejet, et ils contiennent tous des chaînes d'attaque **par construction** — charges de test, littéraux d'expression régulière du code des détecteurs eux-mêmes, et tableaux README/OWASP qui nomment ces motifs. Un README n'est pas défectueux parce qu'il liste `(a+)+`. Analyser ses propres artefacts suppose d'exclure d'abord ce corpus — ou de choisir un autre critère.
 
 ### `upload` signale `<%@` / `<?php` comme Critical où qu'ils apparaissent
 

@@ -51,7 +51,7 @@ security-rust/
 │   ├── file/               3 Datei-Detektoren
 │   ├── session/            SessionGuard + SessionStore (guard / store / geo)
 │   └── throttle/           Throttle + ThrottleStore (guard / store)
-├── tests/                  7 Integrationstests: Sitzung, Throttle, Lebenszyklus, Invarianten, Robustheit, End-to-End, Multi-Key-Throttle
+├── tests/                  8 Integrationstests: Sitzung, Throttle, Lebenszyklus, Invarianten, Robustheit, End-to-End, Multi-Key-Throttle, Realwelt-Korpus
 ├── examples/
 │   ├── waf.rs              End-to-End-Pipeline (Scannen → Throttle → Sitzung → Maßnahme)
 │   └── axum_middleware.rs  Referenz zur Einbindung der axum-Middleware
@@ -92,7 +92,7 @@ Diese Bibliothek ist als **reiner Eingabescanner** konzipiert — sie empfängt 
 
 ### Zwei Stufen: starke und schwache Signale
 
-Ein Detektor meldet **nicht** jeden Treffer mit seinem erklärten Schweregrad. 18 der 32 Detektoren teilen ihre Muster in zwei Stufen (die Statics `STRONG_PATTERNS` / `WEAK_PATTERNS` im Quelltext):
+Ein Detektor meldet **nicht** jeden Treffer mit seinem erklärten Schweregrad. 18 der 32 Detektoren haben eine Schwachsignal-Stufe (Treffer werden immer mit dem festen `Severity::Low` gemeldet): 17 von ihnen tragen beide Stufen — 15 teilen sie über die Statics `STRONG_PATTERNS` / `WEAK_PATTERNS` im Quelltext, während `cors` / `hpp` ihre Stufen per Inline-Bedingung entscheiden; der verbleibende `dns_rebinding` ist durchgehend schwach:
 
 | Stufe | Kriterium | Gemeldeter Schweregrad | Überschreitet ein einzelner Treffer die Ablehnungsgrenze? |
 |------|------|-----------|------------------|
@@ -186,10 +186,10 @@ Mit `schwach` markierte Muster in den Tabellen sind **schwache Signale**: Sie me
 | Detektor | Abgedeckte Muster | Schweregrad |
 |--------|---------|--------|
 | **ssrf** | Cloud-Metadaten `169.254.169.254` und `metadata.google.internal` (ohne URL-Kontext), interne IPs in **URL-Authority-Position** (nach `//`) `10.x`/`172.16-31.x`/`192.168.x`/`127.x`, `//localhost`, `//0.0.0.0`, `//[::1]`, gefährliche Protokolle `gopher://`/`dict://`/`ftp://user@`/`file:///`; `schwach`: dieselben internen Literale in **Nicht-URL-Position** (`X-Forwarded-For: 10.0.0.5`, `bind 127.0.0.1`, `{"host": "10.0.0.1"}` sind byteweise identisch) | Critical |
-| **xxe** | Entitäts-Deklarationen `<!ENTITY`, externe Referenzen `SYSTEM`/`PUBLIC`, Parameter-Entitäten `%`, DTD-Deklaration `<!DOCTYPE` | Critical |
+| **xxe** | `<!ENTITY` gefolgt von Whitespace (Groß-/Kleinschreibung egal) — ein einziges Muster deckt alle Entitäts-Deklarationsformen ab: externe Referenzen `SYSTEM`/`PUBLIC`, Parameter-Entitäten `%`; ein nacktes `<!DOCTYPE` oder `SYSTEM "…"`/`PUBLIC "…"` in Fließtext ist kein Signal (beides begegnet einem überall in gewöhnlichen HTML- / SVG-Dokumenten und normalem Text) | Critical |
 | **header_injection** | Antwort-spezifische Header nach vorangestelltem `\r\n`: `Set-Cookie`/`Location`/`Refresh`/`Status`/`WWW-Authenticate`, oder `%0d` zusammen mit `%0a` (auch in umgekehrter Reihenfolge `%0a…%0d`). `Content-Length`/`Content-Type`/`Transfer-Encoding` sind **Request**-Header und byteweise identisch mit dem Header jeder wohlgeformten Anfrage; sie sind deshalb kein Signal mehr (die kodierte Form `%0d%0aContent-Length:` wird weiterhin von `%0d`+`%0a` abgedeckt) | High |
 | **host_header** | **Zwei** `Host:`-Header (RFC 7230 §5.4 verlangt 400, zwei Parser lesen unterschiedliche Werte); `schwach`: `X-Forwarded-Host`/`X-Original-URL`/`X-Rewrite-URL` — Proxies setzen diese Header selbst, byteweise identisch mit einer Fälschung durch den Client (`X-Forwarded-For`/`X-Forwarded-Proto` werden gar nicht gemeldet) | High |
-| **request_smuggling** | Doppelte `Transfer-Encoding`-Header, Smuggling über `Content-Length: 0`, Obfuskation des Chunked-Abschlusses `\r\n0\r\n` | High |
+| **request_smuggling** | Wiederholte `Transfer-Encoding`-Header (die beiden Parser-Schichten wählen verschiedene Werte) oder `Transfer-Encoding :` mit Whitespace zwischen Header-Name und Doppelpunkt (von RFC 7230 §3.2.4 verboten, ein laxer Parser liest es dennoch als chunked); ein einzelnes `Transfer-Encoding: chunked` ist die normale Schreibweise einer Anfrage mit Chunked-Body und wird **nicht** gemeldet | High |
 | **open_redirect** | Sprünge über Pseudo-Protokolle `javascript:`/`data:text/html`/`data:text/plain` (Schema mit folgendem Inhalt); `schwach`: protokollrelative URLs `//evil.com` — identisch mit CDN-Links in Quelltextkommentaren und Doku | Medium |
 | **cors** | `Access-Control-Allow-Origin: null` sowie `Access-Control-Allow-Origin: *` **zusammen mit** `Access-Control-Allow-Credentials: true`; `schwach`: `Origin: null` auf der Request-Seite (Sandbox-iframes, `data:`-URLs und lokale Dateien haben genau diesen Origin — es braucht ein spiegelndes `ACAO: null`, damit es greift). Einzeln sind beide für öffentliche APIs und statische Assets normal und werden nicht gemeldet | Medium |
 | **websocket** | `Origin: null` zusammen mit einem WebSocket-Upgrade (CSWSH), `ws://` auf Loopback-/private/Link-Local-Adressen (inkl. Cloud-Metadaten-Endpunkt `169.254.169.254`) | High |
@@ -215,7 +215,7 @@ Mit `schwach` markierte Muster in den Tabellen sind **schwache Signale**: Sie me
 |--------|---------|--------|
 | **path_traversal** | **Mehrstufiger** Pfadaufstieg `(?:\.\./){2,}`/`(?:\.\.\\){2,}`, URL-kodierter Bypass `%2e%2e`/`..%2f`/`..%5c`, Protokoll-Wrapper `php://filter`/`php://input`/`phar://`/`zip://`/`data://`/`expect://`/`glob://`, Null-Byte-Terminierung `%00`; `schwach`: ein einstufiges `../`/`..\` (identisch mit einem relativen Pfad in Quelltext oder Doku) | Critical |
 | **upload** | PHP-Tags `<?php`/`<?=`, ASP-Tags `<%@`/`<%=`, Backdoor-Muster `eval($_`/`system($_`/`exec($_`/`passthru($_`, Superglobals `$_GET`/`$_POST`/`$_REQUEST`/`$_SERVER`, Kodierungs-Bypass mit `base64_decode()` | Critical |
-| **data_leak** | 16-stellige Kreditkarten-PAN (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM-Private-Key-Header `-----BEGIN`, OpenAI/LLM-API-Keys `sk-...`, Datenbank-Verbindungsstrings `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**müssen `@`-Userinfo tragen**: `mysql://root:secret@db` wird gemeldet, `redis://shared-memory` und `postgres://localhost:5432/app` sind gewöhnliche Konfiguration und werden **nicht** gemeldet), `jdbc:` (ohne diese Einschränkung), JWT-Tokens | Critical |
+| **data_leak** | 16-stellige Kreditkarten-PAN (Visa/MasterCard/AmEx/Discover/JCB/Diners), AWS Access Keys `AKIA...`, PEM-Private-Key-Header `-----BEGIN`, OpenAI/LLM-API-Keys `sk-...`, Datenbank-Verbindungsstrings `mongodb://`/`mysql://`/`postgresql://`/`redis://` (**müssen `@`-Userinfo tragen**: `mysql://root:secret@db` wird gemeldet, `redis://shared-memory` und `postgres://localhost:5432/app` sind gewöhnliche Konfiguration und werden **nicht** gemeldet), `jdbc:` (ohne diese Einschränkung) | Critical |
 
 ---
 
@@ -229,7 +229,7 @@ Sein Kriterium lautet „im `Host:`-Header steht eine interne Adresse" — und g
 
 ### Diese Bibliothek kann ihren eigenen Quelltext, ihre Tests und ihre Doku nicht scannen
 
-Die Obergrenze des Signatur-Scanners: gemessen an diesem Repository überschreiten 78 von 298 Dateien die Ablehnungsgrenze, und sie enthalten **konstruktionsbedingt** alle Angriffsstrings — Testlasten, die Regex-Literale der Detektor-Quelltexte selbst und die README- und OWASP-Tabellen, die diese Muster auflisten. Ein README wird nicht dadurch mangelhaft, dass es `(a+)+` auflistet. Wer die eigenen Artefakte scannen will, muss diesen Korpus zuerst ausschließen — oder ein anderes Kriterium wählen.
+Die Obergrenze des Signatur-Scanners: feedet man jede UTF-8-Textdatei unterhalb des Repo-Wurzelverzeichnisses (ohne `target/` und `.git/`) in den `Scanner`, überschreiten 85 von 383 Dateien die Ablehnungsgrenze, und sie enthalten **konstruktionsbedingt** alle Angriffsstrings — Testlasten, die Regex-Literale der Detektor-Quelltexte selbst und die README- und OWASP-Tabellen, die diese Muster auflisten. Ein README wird nicht dadurch mangelhaft, dass es `(a+)+` auflistet. Wer die eigenen Artefakte scannen will, muss diesen Korpus zuerst ausschließen — oder ein anderes Kriterium wählen.
 
 ### `upload` meldet `<%@` / `<?php` überall als Critical
 
@@ -292,7 +292,7 @@ let results = scanner.scan("<img src=x onerror=alert(1)>");
 
 // Schwaches Signal: das Token kommt nur vor ⇒ immer Low, allein überschreitet es die Grenze nicht
 let weak = scanner.scan("<script src=\"/app.js\"></script>");
-// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+// [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (das Leerzeichen am Ende gehört zum Muster)
 ```
 
 Die Risikobewertung fasst die Trefferliste zu einer einzigen Stufe zusammen, damit gestapelte Signale niedriger Schwere nicht stillschweigend untergehen:
@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Build
 cargo build --release
 
-# Tests (580: 431 Unit-Tests, 148 Integrationstests, 1 Dokumentationstest)
+# Tests (594: 445 Unit-Tests, 148 Integrationstests, 1 Dokumentationstest)
 cargo test
 
 # End-to-End-Pipeline-Beispiel (Scannen → Throttle → Sitzung → Maßnahme)

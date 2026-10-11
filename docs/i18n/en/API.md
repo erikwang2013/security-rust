@@ -39,7 +39,7 @@ pub struct DetectionResult {
 
 ## Two Tiers: Strong and Weak Signals
 
-18 of the 32 detectors split their patterns into two tiers (each detector's own strong/weak pattern sets — most keep them in statics, but where the strong branch is conditional, as in `hpp` and `cors`, they are built inline). The `DetectionResult` shape is unchanged — what changes is the value of `severity`:
+18 of the 32 detectors have a weak-signal tier (hits are always reported at the fixed `Severity::Low`). 17 of them carry both tiers — 15 split them with the `STRONG_PATTERNS` / `WEAK_PATTERNS` statics in the source, while `cors` / `hpp` decide their strong tier with an inline conditional; the remaining `dns_rebinding` is weak all the way. The `DetectionResult` shape is unchanged — what changes is the value of `severity`:
 
 | Tier | Test | `severity` | Can a single hit cross the reject line? |
 |------|------|-----------|----------------------------------------|
@@ -96,7 +96,7 @@ fn main() {
 
     // A weak signal uses the same detector and the same attack_type, reporting Low
     let weak = scanner.scan("<script src=\"/app.js\"></script>");
-    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script>
+    // [LOW] XSS tag present (weak signal) — offset: 0, pattern: <script  (the trailing space is part of the pattern)
 }
 ```
 
@@ -518,7 +518,7 @@ Its test is "an internal address appears in `Host:`" — and that same shape is 
 
 ### This crate cannot scan its own source, tests, or docs
 
-The signature scanner's ceiling: measured over this repository, 78 of 298 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
+The signature scanner's ceiling: feeding every UTF-8 text file under the repo root (skipping `target/` and `.git/`) to `Scanner`, 85 of 383 files cross the reject line, and every one of them contains attack strings **by construction** — test payloads, the detector sources' own regex literals, and the README/OWASP tables that name the patterns. A README is not defective because it lists `(a+)+`. Scanning your own artifacts means excluding that corpus first, or picking a different test.
 
 ### `upload` reports `<%@` / `<?php` as Critical wherever they appear
 
