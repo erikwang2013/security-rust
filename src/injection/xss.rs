@@ -30,17 +30,20 @@ static STRONG_PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
 /// 弱信号：标签 / 函数名「出现」本身在正常页面里极常见 —— `<script src="/app.js">`
 /// 几乎每个网页都有 —— 但它确实是 XSS 的载体。所以报 Low 而不是 Critical：
 /// 单条 5 分不至于触发拒绝，由调用方按聚合分（多条叠加）决定，误报旋钮留给上层。
+/// 标签名后的字符类是 `[\s/>]` 而不是更宽的 `\w`/`.`：`<linked`、`<objective`
+/// （C 头文件、普通单词前缀）不在其中。`|$` 补上「标签名后就是输入结束」这一格 ——
+/// 载荷被截断或以 `<script` 收尾时不再整条漏报。
 /// 6 条分支合并成 1 条 alternation —— `regex_detect` 对列表里每条 `Regex` 各跑一次
 /// `find`，干净输入下 6 次全文扫描变 1 次。分支顺序 = 原 vec 顺序（同一位置上取最左
 /// 分支；与「按列表顺序取第一条命中的模式」相比偏移量可能不同，档位不变）。
 /// 各分支共同的 `(?i)` 提升为外层 `(?i:…)`，作用域正好覆盖全部 6 条分支。
 static WEAK_PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"(?i:<script[\s/>]",
-        r"|<iframe[\s/>]",
-        r"|<embed[\s/>]",
-        r"|<object[\s/>]",
-        r"|<link[\s/>]",
+        r"(?i:<script(?:[\s/>]|$)",
+        r"|<iframe(?:[\s/>]|$)",
+        r"|<embed(?:[\s/>]|$)",
+        r"|<object(?:[\s/>]|$)",
+        r"|<link(?:[\s/>]|$)",
         r"|expression\s*\()",
     ))
     .unwrap()
@@ -125,6 +128,32 @@ mod tests {
             r#"<object data="logo.svg" type="image/svg+xml"></object>"#,
         ] {
             assert_hit_at(input, Severity::Low);
+        }
+    }
+
+    /// 弱档的边界补齐：`[\s/>]` 要求标签名后**还有**一个字节，于是恰好以 `<script`、
+    /// `<iframe` 收尾的输入（截断的载荷、切片后的文本、`abc<script` 这种拼接）一个都不报。
+    /// `(?:[\s/>]|$)` 补上「输入结束」这一格；字符类本身不能放宽，否则 `<linked`、
+    /// `<objective`（C 头文件、单词前缀）会误报——见下面的干净方向。
+    #[test]
+    fn truncated_tags_at_end_of_input_are_detected() {
+        for input in [
+            "<script",
+            "abc<script",
+            "<SCRIPT",
+            "<iframe",
+            "<embed",
+            "<object",
+            "<link",
+        ] {
+            assert_hit_at(input, Severity::Low);
+        }
+        for input in [
+            "#include <linked_list.h>",
+            "The header <linked_list.h> defines the node type.",
+            "See <objective-c-spec.md> for the plan.",
+        ] {
+            crate::test_helpers::assert_clean(&det(), input);
         }
     }
 

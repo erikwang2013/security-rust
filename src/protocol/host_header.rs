@@ -10,8 +10,12 @@ use crate::{AttackCategory, DetectionResult, Detector, Severity, regex_detect};
 // High 就是 40 分，到拒收线。真正的信号是**两个** Host 头：RFC 7230 §5.4 要求含
 // 多个 Host 的请求一律回 400，两个解析器取值不一致，这正是主机头攻击
 // （路由/缓存投毒、密码重置链接投毒）的落点。
+// 两个 `[ \t]*` 而非 `\s*`：折行（obs-fold，RFC 7230 §3.2.4）只允许 CRLF 后跟
+// SP/HTAB，而 `\s` 还能吞掉 CRLF —— 那正是空行，头块的终止符。`Host: a\r\n\r\nHost: b`
+// 里第二个 Host 在头块**之外**（正文，或第二个请求行被截掉的粘贴内容），
+// 用 `\s*` 会把它当重复头，一粘贴就是 High(40) 到拒收线。
 static STRONG_PATTERNS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(?:^|\r\n)\s*Host:[^\r\n]*\r\n\s*Host:").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)(?:^|\r\n)[ \t]*Host:[^\r\n]*\r\n[ \t]*Host:").unwrap());
 
 // `X-Forwarded-Host` / `X-Original-URL` / `X-Rewrite-URL` 是攻击者覆盖主机判定、
 // 绕过前置访问控制的自定义头，但**出现**本身不是攻击——它们同样由代理自己加：
@@ -100,8 +104,18 @@ mod tests {
         // 单个 Host 头是正常请求，两个才是攻击信号（RFC 7230 §5.4：多个 Host → 400）
         assert_detected("Host: example.com\r\nHost: evil.com");
         assert_detected("GET / HTTP/1.1\r\nHost: a.com\r\nHost: evil.com");
-        // 折行（obs-fold）夹在中间也算相邻两行
+        // 折行（obs-fold）夹在中间也算相邻两行 —— SP 与 HTAB 都算
         assert_detected("GET / HTTP/1.1\r\nHost: a.com\r\n Host: evil.com");
+        assert_detected("GET / HTTP/1.1\r\nHost: a.com\r\n\tHost: evil.com");
+    }
+
+    /// 头块终止符（CRLFCRLF）不能当 obs-fold 跨过去：`Host: a.com\r\n\r\nHost: b.com`
+    /// 里第二个 `Host:` 属于**正文或下一段内容**，不是重复头。旧模式的第二个 `\s*`
+    /// 正好能吞掉空的 `\r\n`，把这种粘贴内容判成 High(40) —— 到拒收线。
+    #[test]
+    fn host_after_blank_line_is_not_a_duplicate() {
+        assert_clean("POST /x HTTP/1.1\r\nHost: a.com\r\n\r\nHost: b.com\r\n");
+        assert_clean("GET / HTTP/1.1\r\nHost: a.com\r\n\r\nHost: b.com\r\n");
     }
 
     #[test]
@@ -160,7 +174,9 @@ mod tests {
         for req in [
             "GET /index.html HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl/8.5.0\r\nAccept: */*\r\n",
             "POST /upload HTTP/1.1\r\nHost: upload.example.com\r\nContent-Type: multipart/form-data; boundary=----x\r\nContent-Length: 1234\r\n\r\n",
-            // 两段请求连排的日志粘贴：各自带一个 Host，不是重复头
+            // 两段请求连排的日志粘贴：各自带一个 Host，不是重复头。这条干净**不依赖**
+            // 第二个请求行 —— 头块终止符（空行）之后的 Host 本来就不是头
+            // （见 `host_after_blank_line_is_not_a_duplicate`）。
             "GET /a HTTP/1.1\r\nHost: example.com\r\n\r\nGET /b HTTP/1.1\r\nHost: example.com\r\n\r\n",
             // 代理链路：反代 / 负载均衡自己加的头。几乎每个走代理的正常请求都带，
             // 判定的只能是值（内网/回环、与对端地址矛盾），不是头在不在。

@@ -34,6 +34,13 @@ static STRONG_PATTERNS: LazyLock<Regex> = LazyLock::new(|| {
         r#"|WAITFOR\s+DELAY\s+['"]?\d"#,
         r"|'\s*OR\s*'1'\s*=\s*'1",
         r"|'\s*OR\s*1\s*=\s*1\s*--",
+        // 数字语境的布尔恒真：`1 OR 1=1` / `1 AND 1=1` / `id=1 OR 1=1`，以及把尾部
+        // 注释掉的 `--` / `#` 变体（`1 AND 1=1--`、`admin' OR 1=1#` 是 MySQL 的规范写法）。
+        // 必须带终止符：散文讨论这个恒等式时 `1=1` 后面还有话
+        // （`1 or 1 = 1 is a tautology`），与载荷只在终止符上分得开 —— 注入把
+        // `1=1` 之后整段注释掉或就地结束输入。`--` / `#` 与下面的注释符分支同源；
+        // `$` 前的 `\s*` 顺带吃掉载荷末尾的换行。
+        r"|\b(?:or|and)\b\s+1\s*=\s*1\s*(?:--|#|$)",
         // 只认带引号 / 十六进制实参的读取：`load_file(fd)`、`LOAD_FILE()` 是普通函数调用
         r#"|LOAD_FILE\s*\(\s*(?:['"]|0x)"#,
         // `INTO OUTFILE` 在真实语法里**必须**跟一个带引号的路径；SQL 教程里那句
@@ -291,6 +298,36 @@ mod tests {
             "The results -- and the conclusions -- were surprising.",
             "Wait -- or restart the service.",
             "/* reset */ and then apply the theme",
+        ] {
+            crate::test_helpers::assert_clean(&det(), input);
+        }
+    }
+
+    /// 数字语境的布尔恒真 —— 曾整体漏报：旧模式只认带引号且以 `--` 收尾的形态
+    /// （`' OR 1=1 --`），裸的 `1 OR 1=1`、`1 AND 1=1` 及其 `#` / `--` 变体全部静默
+    /// 放过，其中 `admin' OR 1=1#` 是 MySQL 的规范写法。
+    /// 判据是**终止符**：注入把 `1=1` 之后注释掉或就地结束输入；散文讨论这个恒等式时
+    /// `1=1` 后面还有话（`1 or 1 = 1 is a tautology`）——两者只在这里形状不同。
+    #[test]
+    fn numeric_tautology_detected_but_prose_about_it_kept_clean() {
+        for input in [
+            "1 OR 1=1",
+            "1 AND 1=1",
+            "1 OR 1=1#",
+            "1 AND 1=1--",
+            "id=1 OR 1=1",
+            "admin' OR 1=1#",
+            "/search?id=1 OR 1=1#",
+            "1 or 1 = 1 --",
+        ] {
+            assert_hit(input);
+        }
+        for input in [
+            // `1=1` 后面还有话 -> 不是终止符 -> 讨论恒等式的散文
+            "1 or 1 = 1 is a tautology",
+            "In Boolean algebra, 1 and 1 = 1 while 1 and 0 = 0.",
+            "A condition like `x = 1 OR 1 = 1` makes the clause always true.",
+            "Searching for \"1 or 1=1\" brings up injection tutorials.",
         ] {
             crate::test_helpers::assert_clean(&det(), input);
         }

@@ -141,6 +141,9 @@ mod tests {
 
     /// 正常模板源码。`{% if %}`、`<%= @user.name %>`、`#set(`、`<#assign>` 是各自模板
     /// 语言的功能写法，每个模板文件都长这样；它们曾按 Critical 被判 SSTI，整份文件被拒。
+    /// 下面是**本检测器局部**的档位，不是全管线保证：`<%=` 在完整管线里仍是 upload
+    /// 检测器的 Critical（webshell 特征），只扫这一条输入时 `Hello <%= @user.name %>`
+    /// 照样越过拒收线 —— 那是输入域（上传的文件 vs 渲染后的页面）问题，不归 ssti 管。
     #[test]
     fn template_source_is_low_not_critical() {
         for input in [
