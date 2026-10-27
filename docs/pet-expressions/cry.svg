@@ -90,19 +90,19 @@
   </g>
 
   
-  <path d="M224 282 Q240 294 256 282" stroke="#7A2312" stroke-width="4" stroke-linecap="round" fill="none"/>
+  
 
   
   <g stroke="#CE422B" stroke-width="9" stroke-linecap="round">
     <path d="M210 172 L196 134"/>
     <path d="M270 172 L284 134"/>
   </g>
-  <circle cx="194" cy="126" r="16" fill="#FFFFFF" stroke="#8F2A17" stroke-width="3"/>
-  <circle cx="286" cy="126" r="16" fill="#FFFFFF" stroke="#8F2A17" stroke-width="3"/>
-  <circle cx="196" cy="128" r="8" fill="#1F1B18"/>
-  <circle cx="288" cy="128" r="8" fill="#1F1B18"/>
-  <circle cx="199" cy="125" r="3" fill="#FFFFFF"/>
-  <circle cx="291" cy="125" r="3" fill="#FFFFFF"/>
+  
+  
+  
+  
+  
+  
   
   <circle cx="286" cy="126" r="23" fill="none" stroke="#D4A017" stroke-width="3"/>
   <path d="M306 142 C316 152 320 162 320 172" stroke="#D4A017" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
@@ -132,4 +132,4 @@
   <text x="36" y="408" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="26" font-weight="700" fill="#1F1B18">甲哨 Sentri</text>
   <text x="36" y="432" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#7A6A5C">security-rust 项目宠物 · 只报告，不拦截</text>
   <rect x="336" y="388" width="112" height="26" rx="13" fill="#EDF7F1" stroke="#0E9F6E" stroke-width="1.5"/>
-  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text></g><g class="ex-face"><ellipse cx="240" cy="142" rx="66" ry="46" fill="#CE422B"/><path d="M 188.4,120 L 200.4,115.2" stroke="#1F1B18" stroke-width="1.6" stroke-linecap="round"/><path d="M 295.6,120 L 283.6,115.2" stroke="#1F1B18" stroke-width="1.6" stroke-linecap="round"/><path d="M 188.4,126.4 Q 196,136.8 203.6,126.4" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path d="M 280.4,126.4 Q 288,136.8 295.6,126.4" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path d="M 221.76,145.6 Q 226.82,133.13 231.88,136.69 Q 236.94,133.13 242,145.6 Q 247.06,158.07 252.12,154.51 Q 257.18,158.07 262.24,145.6" fill="none" stroke="#1F1B18" stroke-width="1.7" stroke-linecap="round"/><ellipse cx="190" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.25"/><ellipse cx="294" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.25"/><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.0s" d="M 196,130.2 C 199.3,135.48 199.3,140.32 196,140.32 C 192.7,140.32 192.7,135.48 196,130.2 Z" fill="#7CC4F8"/><circle cx="196" cy="135.26" r="0.97" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.55s" d="M 288,130.2 C 291.3,135.48 291.3,140.32 288,140.32 C 284.7,140.32 284.7,135.48 288,130.2 Z" fill="#7CC4F8"/><circle cx="288" cy="135.26" r="0.97" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.9s" d="M 195.2,135.8 C 197.3,139.16 197.3,142.24 195.2,142.24 C 193.1,142.24 193.1,139.16 195.2,135.8 Z" fill="#A8D8FB"/><circle cx="195.2" cy="139.02" r="0.62" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:1.35s" d="M 288.8,135.8 C 290.9,139.16 290.9,142.24 288.8,142.24 C 286.7,142.24 286.7,139.16 288.8,135.8 Z" fill="#A8D8FB"/><circle cx="288.8" cy="139.02" r="0.62" fill="#FFFFFF" opacity=".8"/></g></g></g></svg>
+  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text></g><g class="ex-face"><path d="M 188.4,120 L 200.4,115.2" stroke="#1F1B18" stroke-width="1.6" stroke-linecap="round"/><path d="M 295.6,120 L 283.6,115.2" stroke="#1F1B18" stroke-width="1.6" stroke-linecap="round"/><path d="M 188.4,126.4 Q 196,136.8 203.6,126.4" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path d="M 280.4,126.4 Q 288,136.8 295.6,126.4" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path d="M 221.76,145.6 Q 226.82,133.13 231.88,136.69 Q 236.94,133.13 242,145.6 Q 247.06,158.07 252.12,154.51 Q 257.18,158.07 262.24,145.6" fill="none" stroke="#1F1B18" stroke-width="1.7" stroke-linecap="round"/><ellipse cx="190" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.25"/><ellipse cx="294" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.25"/><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.0s" d="M 196,130.2 C 199.3,135.48 199.3,140.32 196,140.32 C 192.7,140.32 192.7,135.48 196,130.2 Z" fill="#7CC4F8"/><circle cx="196" cy="135.26" r="0.97" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.55s" d="M 288,130.2 C 291.3,135.48 291.3,140.32 288,140.32 C 284.7,140.32 284.7,135.48 288,130.2 Z" fill="#7CC4F8"/><circle cx="288" cy="135.26" r="0.97" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:0.9s" d="M 195.2,135.8 C 197.3,139.16 197.3,142.24 195.2,142.24 C 193.1,142.24 193.1,139.16 195.2,135.8 Z" fill="#A8D8FB"/><circle cx="195.2" cy="139.02" r="0.62" fill="#FFFFFF" opacity=".8"/></g><g transform="translate(0 0)"><path class="ex-anim-tear" style="animation-delay:1.35s" d="M 288.8,135.8 C 290.9,139.16 290.9,142.24 288.8,142.24 C 286.7,142.24 286.7,139.16 288.8,135.8 Z" fill="#A8D8FB"/><circle cx="288.8" cy="139.02" r="0.62" fill="#FFFFFF" opacity=".8"/></g></g></g></svg>

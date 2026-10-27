@@ -90,19 +90,19 @@
   </g>
 
   
-  <path d="M224 282 Q240 294 256 282" stroke="#7A2312" stroke-width="4" stroke-linecap="round" fill="none"/>
+  
 
   
   <g stroke="#CE422B" stroke-width="9" stroke-linecap="round">
     <path d="M210 172 L196 134"/>
     <path d="M270 172 L284 134"/>
   </g>
-  <circle cx="194" cy="126" r="16" fill="#FFFFFF" stroke="#8F2A17" stroke-width="3"/>
-  <circle cx="286" cy="126" r="16" fill="#FFFFFF" stroke="#8F2A17" stroke-width="3"/>
-  <circle cx="196" cy="128" r="8" fill="#1F1B18"/>
-  <circle cx="288" cy="128" r="8" fill="#1F1B18"/>
-  <circle cx="199" cy="125" r="3" fill="#FFFFFF"/>
-  <circle cx="291" cy="125" r="3" fill="#FFFFFF"/>
+  
+  
+  
+  
+  
+  
   
   <circle cx="286" cy="126" r="23" fill="none" stroke="#D4A017" stroke-width="3"/>
   <path d="M306 142 C316 152 320 162 320 172" stroke="#D4A017" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
@@ -132,4 +132,4 @@
   <text x="36" y="408" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="26" font-weight="700" fill="#1F1B18">甲哨 Sentri</text>
   <text x="36" y="432" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#7A6A5C">security-rust 项目宠物 · 只报告，不拦截</text>
   <rect x="336" y="388" width="112" height="26" rx="13" fill="#EDF7F1" stroke="#0E9F6E" stroke-width="1.5"/>
-  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text></g><g class="ex-face"><ellipse cx="240" cy="142" rx="66" ry="46" fill="#CE422B"/><path d="M 188.4,130.24 Q 196,118.8 203.6,130.24" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path class="ex-anim-pulse" style="animation-delay:0s" d="M 288,131.19 C 279.43,124.64 283.13,118.59 288,123.97 C 292.87,118.59 296.57,124.64 288,131.19 Z" fill="#FF7AA2"/><ellipse cx="242" cy="145.6" rx="7.29" ry="4.9" fill="none" stroke="#1F1B18" stroke-width="1.7"/><ellipse class="ex-anim-pulse" cx="190" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.7"/><ellipse class="ex-anim-pulse" cx="294" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.7"/><path class="ex-anim-heart" style="animation-delay:0.0s" d="M 187.86,82.75 C 182.14,78.38 184.61,74.35 187.86,77.94 C 191.1,74.35 193.57,78.38 187.86,82.75 Z" fill="#FF7AA2"/><path class="ex-anim-heart" style="animation-delay:0.7s" d="M 300.66,71.02 C 296.17,67.58 298.1,64.42 300.66,67.23 C 303.21,64.42 305.14,67.58 300.66,71.02 Z" fill="#FF7AA2"/><path class="ex-anim-heart" style="animation-delay:1.3s" d="M 282.61,104.34 C 279.51,101.97 280.84,99.78 282.61,101.72 C 284.37,99.78 285.71,101.97 282.61,104.34 Z" fill="#FF7AA2"/></g></g></svg>
+  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text></g><g class="ex-face"><path d="M 188.4,130.24 Q 196,118.8 203.6,130.24" fill="none" stroke="#1F1B18" stroke-width="1.8" stroke-linecap="round"/><path class="ex-anim-pulse" style="animation-delay:0s" d="M 288,131.19 C 279.43,124.64 283.13,118.59 288,123.97 C 292.87,118.59 296.57,124.64 288,131.19 Z" fill="#FF7AA2"/><ellipse cx="242" cy="145.6" rx="7.29" ry="4.9" fill="none" stroke="#1F1B18" stroke-width="1.7"/><ellipse class="ex-anim-pulse" cx="190" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.7"/><ellipse class="ex-anim-pulse" cx="294" cy="138.8" rx="6.24" ry="3.36" fill="#FF8FB3" opacity="0.7"/><path class="ex-anim-heart" style="animation-delay:0.0s" d="M 187.86,82.75 C 182.14,78.38 184.61,74.35 187.86,77.94 C 191.1,74.35 193.57,78.38 187.86,82.75 Z" fill="#FF7AA2"/><path class="ex-anim-heart" style="animation-delay:0.7s" d="M 300.66,71.02 C 296.17,67.58 298.1,64.42 300.66,67.23 C 303.21,64.42 305.14,67.58 300.66,71.02 Z" fill="#FF7AA2"/><path class="ex-anim-heart" style="animation-delay:1.3s" d="M 282.61,104.34 C 279.51,101.97 280.84,99.78 282.61,101.72 C 284.37,99.78 285.71,101.97 282.61,104.34 Z" fill="#FF7AA2"/></g></g></svg>
