@@ -367,7 +367,7 @@ let _ = throttle.record_failure(key, now);
 # بناء
 cargo build --release
 
-# اختبار (594 اختبارًا: 445 اختبار وحدة + 148 اختبار تكامل + 1 اختبار توثيقي)
+# اختبار (599 اختبارًا: 445 اختبار وحدة + 153 اختبار تكامل + 1 اختبار توثيقي)
 cargo test
 
 # مثال المسار الكامل من البداية إلى النهاية (فحص → حد من المعدل → جلسة → إجراء)
@@ -385,7 +385,7 @@ cargo clippy -- -D warnings
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### التحويلات العالمية (حوالات دولية)
 

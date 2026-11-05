@@ -92,6 +92,37 @@ impl SessionStore for HalfBrokenStore {
     }
 }
 
+/// `put` / `get` / `touch` 正常，但 `revoke` 永远失败 —— 覆盖 `rotate`
+/// 在吊销旧 token 失败时不得写入新 token 的 fail-closed 顺序。
+struct RevokeBrokenStore(MemoryStore);
+
+impl SessionStore for RevokeBrokenStore {
+    fn put(&self, r: SessionRecord) -> Result<(), StoreError> {
+        self.0.put(r)
+    }
+    fn get(&self, t: &str) -> Result<Option<SessionRecord>, StoreError> {
+        self.0.get(t)
+    }
+    fn touch(&self, t: &str, n: u64) -> Result<(), StoreError> {
+        self.0.touch(t, n)
+    }
+    fn revoke(&self, _t: &str) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable)
+    }
+    fn revoke_subject(&self, s: &str) -> Result<usize, StoreError> {
+        self.0.revoke_subject(s)
+    }
+    fn recent_logins(&self, s: &str) -> Result<Vec<LoginPoint>, StoreError> {
+        self.0.recent_logins(s)
+    }
+    fn record_login(&self, s: &str, p: LoginPoint) -> Result<(), StoreError> {
+        self.0.record_login(s, p)
+    }
+    fn purge_expired(&self, n: u64) -> Result<usize, StoreError> {
+        self.0.purge_expired(n)
+    }
+}
+
 /// 与 `ctx("t1", "u1", FP)` 相符的一条会话记录，供替身存储直接 `put` 用。
 fn record(token: &str, subject: &str) -> SessionRecord {
     SessionRecord {
@@ -409,4 +440,28 @@ fn bind_propagates_store_failure_as_error() {
     // 登录路径要让调用方知道「会话没建起来」，而不是拿到看着成功的 verdict
     let g = SessionGuard::new(BrokenStore, SessionConfig::default());
     assert!(g.bind(&ctx("t1", "u1", FP), NOW).is_err());
+}
+
+#[test]
+fn rotate_fails_closed_when_old_token_cannot_be_revoked() {
+    // 先吊销旧 token 再写新记录：revoke 失败时新 token 绝不能落库，
+    // 否则就是「两个 token 同时有效」的 fail-open。
+    let store = RevokeBrokenStore(MemoryStore::new());
+    store.put(record("old", "u1")).unwrap();
+    let g = SessionGuard::new(store, SessionConfig::default());
+
+    assert!(
+        g.rotate("old", "new", &ctx("old", "u1", FP), NOW + 10)
+            .is_err(),
+        "revoke 失败必须让 rotate 返回错误"
+    );
+    assert_eq!(
+        g.verify(&ctx("new", "u1", FP), NOW + 20).threats,
+        vec![SessionThreat::TokenUnknown],
+        "旧 token 吊销失败时不得写入新 token"
+    );
+    assert!(
+        g.verify(&ctx("old", "u1", FP), NOW + 20).is_allowed(),
+        "revoke 失败时旧会话保持可用（没有产生第二个 token）"
+    );
 }

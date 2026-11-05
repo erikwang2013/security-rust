@@ -20,5 +20,5 @@ without prior written permission. A commercial license is required for commercia
 - 第三方素材仍遵循其原许可证；例如项目内明确标注的 Go Gopher（© Go Authors /
   Renee French, CC BY 4.0）等，不因本文件而改变其授权。
 - 代码部分仍遵循仓库根目录的 `LICENSE`（如有）；本文件仅覆盖视觉资产。
-- `emoji` 项目中字体文件内用于短码连字的 ASCII 字形派生自 DejaVu Sans，遵循
-  `font/LICENSE-DejaVu.txt`。
+- 项目内如使用 DejaVu Sans 字形，遵循 DejaVu 字体许可（Bitstream Vera License）：
+  <https://dejavu-fonts.github.io/License.html>。

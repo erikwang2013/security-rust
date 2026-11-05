@@ -372,7 +372,7 @@ let _ = throttle.record_failure(key, now);
 # Compilar
 cargo build --release
 
-# Testes (594: 445 unitários + 148 de integração + 1 teste de documentação)
+# Testes (599: 445 unitários + 153 de integração + 1 teste de documentação)
 cargo test
 
 # Exemplo de pipeline ponta a ponta (varredura → limitação de taxa → sessão → ação)
@@ -390,7 +390,7 @@ Se este projeto foi útil para você, sinta-se à vontade para apoiá-lo com uma
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Transferência Global (Remessa Internacional)
 

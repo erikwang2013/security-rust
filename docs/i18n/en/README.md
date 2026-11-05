@@ -372,7 +372,7 @@ See the [API Reference](./API.md) for the complete API documentation (installati
 # Build
 cargo build --release
 
-# Tests (594: 445 unit + 148 integration + 1 doc test)
+# Tests (599: 445 unit + 153 integration + 1 doc test)
 cargo test
 
 # End-to-end pipeline example (scan → throttle → session → action)
@@ -390,7 +390,7 @@ If you find this project helpful, donations are welcome (voluntary).
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Global Transfer (International Remittance)
 

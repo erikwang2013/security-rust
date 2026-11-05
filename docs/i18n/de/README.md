@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Build
 cargo build --release
 
-# Tests (594: 445 Unit-Tests, 148 Integrationstests, 1 Dokumentationstest)
+# Tests (599: 445 Unit-Tests, 153 Integrationstests, 1 Dokumentationstest)
 cargo test
 
 # End-to-End-Pipeline-Beispiel (Scannen → Throttle → Sitzung → Maßnahme)
@@ -389,7 +389,7 @@ Wenn dir dieses Projekt hilft, freuen wir uns über eine Spende (freiwillig).
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Internationale Überweisung (Auslandsüberweisung)
 

@@ -357,7 +357,7 @@ let _ = throttle.record_failure(key, now);
 # ビルド
 cargo build --release
 
-# テスト（594 件: ユニット 445 + 統合 148 + ドキュメントテスト 1）
+# テスト（599 件: ユニット 445 + 統合 153 + ドキュメントテスト 1）
 cargo test
 
 # エンドツーエンドパイプラインの例（スキャン → レート制限 → セッション → 判定）
@@ -375,7 +375,7 @@ cargo clippy -- -D warnings
 
 | 支付宝 (Alipay) | 微信支付 (WeChat Pay) |
 |--------|---------|
-| ![支付宝](alipay.png) | ![微信支付](weixinpay.png) |
+| ![支付宝](../../alipay.png) | ![微信支付](../../weixinpay.png) |
 
 ### グローバル送金（国際送金）
 

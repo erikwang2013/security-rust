@@ -357,7 +357,7 @@ let _ = throttle.record_failure(key, now);
 # 빌드
 cargo build --release
 
-# 테스트(594개: 유닛 445 + 통합 148 + 문서 테스트 1)
+# 테스트(599개: 유닛 445 + 통합 153 + 문서 테스트 1)
 cargo test
 
 # 엔드투엔드 파이프라인 예제(스캔 → 속도 제한 → 세션 → 처리)
@@ -375,7 +375,7 @@ cargo clippy -- -D warnings
 
 | 알리페이 | 위챗페이 |
 |--------|---------|
-| ![알리페이](./alipay.png) | ![위챗페이](./weixinpay.png) |
+| ![알리페이](../../alipay.png) | ![위챗페이](../../weixinpay.png) |
 
 ### 해외 송금 (국제 송금)
 

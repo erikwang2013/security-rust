@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Construction
 cargo build --release
 
-# Tests (594 : 445 unitaires, 148 d'intégration, 1 de documentation)
+# Tests (599 : 445 unitaires, 153 d'intégration, 1 de documentation)
 cargo test
 
 # Exemple de chaîne de bout en bout (scan → limitation → session → action)
@@ -389,7 +389,7 @@ Si ce projet vous est utile, vous êtes invités à le soutenir par un don (facu
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](alipay.png) | ![WeChat Pay](weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Virement international
 

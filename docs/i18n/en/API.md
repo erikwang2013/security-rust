@@ -317,9 +317,11 @@ assert_eq!(verdict.decision, Decision::Block);
 
 **Fail-closed on store errors.** A store failure yields `SessionThreat::StoreUnavailable` → `Decision::Block`. Failing open would let an attacker trigger a bypass by inducing a backend failure. This covers both a failed `get` and an unreadable login history — skipping the history check silently would disable foreign-location detection entirely.
 
-**`bind` always succeeds for valid input.** A foreign-location verdict does not block the login; it tells the caller whether to run a second factor.
+**`bind` succeeds for valid input.** A foreign-location verdict does not block the login; it tells the caller whether to run a second factor. A token that points at a live session (exists, unrevoked, unexpired) returns `SessionError::TokenInUse` — same rule as `rotate`. Reusing a client-supplied token is still session fixation: issue a fresh token after authentication.
 
 **`rotate` requires a matching fingerprint.** An old token that exists, is unrevoked, and is unexpired is still rejected unless `ctx.fingerprint` matches the stored one — otherwise an attacker holding someone else's token could swap it for one of their own. The new record's identity fields (`subject`, `location`, `coords`, `signature`) come from the server-side record, never from `ctx`.
+
+**`rotate` writes fail-closed.** It revokes the old token before writing the new record: a failed `revoke` writes nothing, and a failed `put` leaves the old token revoked (the user must log in again). Neither failure leaves two live tokens.
 
 **Activity is refreshed only on `Allow`.** A blocked request does not extend the session's lifetime.
 

@@ -2,7 +2,7 @@
 
 [package]
 name = "security-rust"
-version = "4.0.0"
+version = "5.0.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A pure Rust attack detection library with 32 detectors across 4 categories — injection, protocol, data, and file — plus stateful session, throttling, and risk scoring. Zero framework dependencies."
@@ -15,14 +15,10 @@ categories = ["security", "parsing"]
 # include_str! 内联它，排掉就编译不过（cargo package 会当场报错，不会静默漏发）。
 exclude = [
     "CLAUDE.md",         # 仓库的 agent 配置，与使用者无关
-    "docs/coin",         # 打赏码原图 ~1.2MB
     # 12 语言译文 ~2.1MB，纯为体积排除。注意：README.md 本身随包发布，而它的语言
     # 切换区链接指向这 12 个 README —— 排掉后这些链接在 crates.io 上会降级为死链，
     # 属于已知的取舍，不是「包内无引用」。
     "docs/i18n",
-    "docs/superpowers",  # 设计与计划留档（流程产物）
-    "docs/code-review-2026-07-29.md",  # 评审留档，包内无引用
-    "docs/test-report-2026-08-27.md",  # 测试报告留档，包内无引用
 ]
 
 [dependencies]

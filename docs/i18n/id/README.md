@@ -368,7 +368,7 @@ let _ = throttle.record_failure(key, now);
 # Build
 cargo build --release
 
-# Tes (594: 445 unit + 148 integrasi + 1 doc test)
+# Tes (599: 445 unit + 153 integrasi + 1 doc test)
 cargo test
 
 # Contoh pipeline end-to-end (pemindaian → pembatasan laju → sesi → tindakan)
@@ -386,7 +386,7 @@ Jika proyek ini bermanfaat bagi Anda, dipersilakan untuk mendukung dengan donasi
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Transfer Global (Remitansi Internasional)
 

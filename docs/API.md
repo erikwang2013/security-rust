@@ -220,7 +220,7 @@ println!("{} {}", verdict.decision, verdict.threats.len());  // BLOCK 2
 | `SessionVerdict` | 校验结论：`decision`、`severity: Option<Severity>`、`threats` |
 | `Decision` | `Allow` < `Challenge` < `Block`（声明顺序即严格度顺序） |
 | `SessionThreat` | 11 种威胁，各自映射固定的 `severity()` 与 `decision()` |
-| `SessionConfig` | 校准旋钮：`ttl_secs` = 3600、`impossible_travel_kmh` = 900.0、`timestamp_skew_secs` = 300 |
+| `SessionConfig` | 校准旋钮：`ttl_secs` = 3600、`impossible_travel_kmh` = 900.0、`timestamp_skew_secs` = 300。`impossible_travel_kmh` 为非有限值或负数时，`SessionGuard::new` 会回落到 900.0 |
 | `SessionStore` | 存储抽象 trait，多实例部署实现它接 Redis 即可。`SessionGuard` **按值**持有 store，没有 `Arc<S>` 的 blanket 实现（`Arc<MemoryStore>` 不是 `SessionStore`）：两个 guard 共享一份 store 需要自己写转发全部方法的 newtype；多线程场景更推荐共享一个 `Arc<SessionGuard<S>>` |
 | `MemoryStore` | 内置内存后端（`Mutex<HashMap>`，无后台线程） |
 | `SessionRecord` / `LoginPoint` | 会话记录 / 登录位置快照 |
@@ -244,7 +244,7 @@ impl<S: SessionStore> SessionGuard<S> {
 
 | 方法 | 用途 |
 |------|------|
-| `bind` | 登录：建会话、绑指纹、记登录位置，并返回异地判定 |
+| `bind` | 登录：建会话、绑指纹、记登录位置，并返回异地判定。目标 token 指向在用会话时返回 `SessionError::TokenInUse` |
 | `verify` | 每请求校验，返回处置建议 |
 | `revoke` | 吊销单个会话（登出） |
 | `revoke_all` | 吊销某 subject 的全部会话（改密码 / 踢下线），返回受影响条数 |
@@ -285,7 +285,9 @@ assert_eq!(verdict.decision, Decision::Block);
 - **`verify` 返回 `SessionVerdict` 而非 `Result`** — 认证路径上「拒绝」是正常结果而非错误，强制调用方在类型层面处理每一种拒绝。只有 `bind` / `rotate` 会因调用方误用或后端故障返回 `Result`。
 - **只有放行才刷新活跃度** — 被拦的请求不会延长会话寿命。
 - **`rotate` 绑定指纹** — 旧会话必须存在、未吊销、未过期，且指纹与本次 `ctx` 相符，否则返回 `UnknownSession`；新记录的身份字段（`subject` / `location` / `coords` / `signature`）一律以服务端记录为准，不接受 `ctx` 覆盖。
+- **`bind` 拒绝覆盖在用 token** — 目标 token 指向一个在用会话（存在、未吊销、未过期）时返回 `SessionError::TokenInUse`，原记录不动；已吊销 / 已过期的死记录可以覆盖。复用客户端提供的 token 仍是 session fixation：token 必须由服务端在认证成功后新签发。
 - **`rotate` 要求 `new` 未被占用** — 目标 token 指向一个在用会话（未吊销且未过期）时返回 `SessionError::TokenInUse`，且**零副作用**（失败的 rotate 不写任何记录、不吊销旧会话）。store 的写入是无条件覆盖，不挡这一下，攻击者就能拿自己的会话把受害者的记录整个盖掉 —— 受害者下次校验读到的是攻击者的指纹，被被动踢下线。`new == old` 同样按 `TokenInUse` 拒绝（既要吊销 old 又要 new 可用，语义自相矛盾）；已吊销 / 已过期的死记录可以覆盖。查 `new` 与随后的写入之间不原子：两个并发 `rotate` 抢同一个新 token 仍可能互相覆盖（需要攻击者猜到对方的新 token 并卡进窄窗）。
+- **`rotate` 写入顺序 fail-closed** — 先吊销旧 token，再写新记录。`revoke` 失败时不写新记录；`put` 失败时旧 token 已失效（用户需重新登录）。两种故障都不会留下两个同时有效的 token。
 - **指纹与签名用常数时间比较** — 直接 `==` 会在首个不同字节处提前返回，泄露「前 N 个字节猜对了」的时序信息。
 - **缺失即不判定** — 位置、坐标、时间任一缺失时不产生对应威胁，避免误报；坐标在信任边界清洗，非有限值 / 越界一律视为「没有坐标」。
 - **`now` 由调用方传入** — 全部时间参数都是 unix 秒，调用方须保证单调不减。

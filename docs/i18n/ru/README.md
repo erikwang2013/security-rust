@@ -370,7 +370,7 @@ let _ = throttle.record_failure(key, now);
 # Сборка
 cargo build --release
 
-# Тесты (594: 445 модульных + 148 интеграционных + 1 doc-тест)
+# Тесты (599: 445 модульных + 153 интеграционных + 1 doc-тест)
 cargo test
 
 # Пример сквозного конвейера (сканирование → ограничение частоты → сессия → решение)
@@ -388,7 +388,7 @@ cargo clippy -- -D warnings
 
 | Alipay | WeChat Pay |
 |--------|-----------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Глобальный перевод (международный банковский перевод)
 

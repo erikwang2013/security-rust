@@ -23,14 +23,20 @@
 //! | `Challenge` | 401 + `X-Step-Up-Auth: required`            |
 //! | `Block`     | 401                                         |
 //!
-//! 中间件从请求头取 token / 指纹 / 位置来构造 [`RequestContext`]：
-//! `X-Session-Token` / `X-Client-Fingerprint` / `X-Client-Region`。
+//! token 来自 `X-Session-Token` 请求头；指纹由服务端用「连接对端 IP +
+//! User-Agent」计算；位置取自上游 GeoIP 中间件写入的 [`ClientRegion`] extension。
+//! 客户端能改 User-Agent，但改不了对端 IP 和 request extension —— 指纹与位置
+//! **不能**从客户端提供的请求头读取。
+//!
+//! 真实部署需要 `Router::into_make_service_with_connect_info::<SocketAddr>()`
+//! 才会注入 [`ConnectInfo`]；缺失时指纹为空，`verify` 按不匹配处理（fail-closed）。
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -47,8 +53,11 @@ type GuardState = Arc<SessionGuard<MemoryStore>>;
 const NOW: u64 = 1_700_000_000;
 
 const TOKEN_HEADER: &str = "x-session-token";
-const FINGERPRINT_HEADER: &str = "x-client-fingerprint";
-const REGION_HEADER: &str = "x-client-region";
+
+/// 上游 GeoIP 中间件写入的可信区域。request extension 只能由服务端代码插入，
+/// 客户端无法通过请求头伪造。
+#[derive(Clone, Debug)]
+struct ClientRegion(String);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -84,40 +93,44 @@ async fn self_check() -> Result<(), Box<dyn std::error::Error>> {
     println!("security-rust · axum 中间件接入示例");
     println!("已种会话：alice @ CN-BJ · tok-alice-1\n");
 
-    // (标签, token, 指纹, 区域, 期望的中间件行为)
+    // (标签, token, 对端 IP, User-Agent, 服务端 GeoIP 区域, 期望的中间件行为)
     let cases = [
         (
             "ALLOW      正常会话",
             "tok-alice-1",
-            "ip=10.0.0.1|ua=Firefox/128",
+            "10.0.0.1",
+            "Firefox/128",
             "CN-BJ",
             Expect::Pass,
         ),
         (
             "CHALLENGE  异地（位置变了，指纹没变）",
             "tok-alice-1",
-            "ip=10.0.0.1|ua=Firefox/128",
+            "10.0.0.1",
+            "Firefox/128",
             "US-NY",
             Expect::StepUp,
         ),
         (
             "BLOCK      指纹不符（token 被盗）",
             "tok-alice-1",
-            "ip=203.0.113.9|ua=curl/8",
+            "203.0.113.9",
+            "curl/8",
             "CN-BJ",
             Expect::Reject,
         ),
         (
             "BLOCK      未知 token",
             "tok-forged",
-            "ip=10.0.0.1|ua=Firefox/128",
+            "10.0.0.1",
+            "Firefox/128",
             "CN-BJ",
             Expect::Reject,
         ),
     ];
 
-    for (label, token, fp, region, expect) in cases {
-        let (status, step_up) = probe(app.clone(), token, fp, region).await?;
+    for (label, token, ip, user_agent, region, expect) in cases {
+        let (status, step_up) = probe(app.clone(), token, ip, user_agent, region).await?;
         let seen = match (status, step_up) {
             (StatusCode::OK, _) => Expect::Pass,
             (_, true) => Expect::StepUp,
@@ -146,24 +159,37 @@ enum Expect {
 }
 
 /// 用 `oneshot` 把一条请求直接喂给 router，不起真实端口。
+///
+/// `ConnectInfo` 与 [`ClientRegion`] 模拟真实部署里的连接信息与上游 GeoIP
+/// 中间件 —— 两者都放在 request extensions 里，客户端无法通过请求头设置。
 async fn probe(
     app: Router,
     token: &str,
-    fingerprint: &str,
+    ip: &str,
+    user_agent: &str,
     region: &str,
 ) -> Result<(StatusCode, bool), Box<dyn std::error::Error>> {
-    let req = Request::builder()
+    let mut req = Request::builder()
         .uri("/protected")
         .header(TOKEN_HEADER, token)
-        .header(FINGERPRINT_HEADER, fingerprint)
-        .header(REGION_HEADER, region)
+        .header(header::USER_AGENT, user_agent)
         .body(axum::body::Body::empty())?;
+
+    let ip: IpAddr = ip.parse()?;
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::new(ip, 12_345)));
+    req.extensions_mut()
+        .insert(ClientRegion(region.to_string()));
 
     let res = app.oneshot(req).await?;
     let step_up = res.headers().get("x-step-up-auth").is_some();
     Ok((res.status(), step_up))
 }
 
+/// 真实部署用
+/// `axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())`
+/// 才会注入 [`ConnectInfo`]；否则指纹为空，所有请求都会被 Block。
+/// 这里用 `oneshot` 自检，由 [`probe`] 手动插入连接信息。
 fn build_app(guard: GuardState) -> Router {
     Router::new()
         .route("/protected", get(protected))
@@ -177,26 +203,38 @@ async fn protected() -> &'static str {
 
 /// 会话闸门。
 ///
-/// 从请求头取三个字段构造 [`RequestContext`] 再调 [`SessionGuard::verify`]。
+/// token 来自 `X-Session-Token` 请求头；指纹由服务端用对端 IP + User-Agent
+/// 计算；位置取自上游 GeoIP 中间件写入的 [`ClientRegion`] extension。
 /// `subject` 在 `verify` 里不参与判定（异地历史按服务端记录的 subject 聚合），
 /// 这里留空；`bind` 时它是必填的。
 async fn session_gate(State(guard): State<GuardState>, req: Request, next: Next) -> Response {
-    // 借用 req 的 header 构造 ctx，算完 decision 就把借用放掉，才能把 req 交给下游。
+    // 借用 req 的 header / extensions 构造 ctx，算完 decision 就把借用放掉，
+    // 才能把 req 交给下游。
     let decision = {
-        let headers = req.headers();
+        let peer_ip = req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip());
+        let user_agent = req
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // 指纹只由服务端可观测的信息构成：客户端能改 UA，但改不了对端 IP。
+        // 没有连接信息时用空指纹 ⇒ verify 判 FingerprintMismatch（Block）。
+        let fingerprint = peer_ip.map(|ip| format!("ip={ip}|ua={user_agent}"));
+        let location = req.extensions().get::<ClientRegion>().map(|r| r.0.as_str());
+
         let ctx = RequestContext {
-            token: headers
+            token: req
+                .headers()
                 .get(TOKEN_HEADER)
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or(""),
             subject: "",
-            fingerprint: headers
-                .get(FINGERPRINT_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or(""),
-            location: headers.get(REGION_HEADER).and_then(|v| v.to_str().ok()),
-            // 指纹里已含 IP，示例不再单独解析；生产环境可用已有 geo 库回填坐标，
-            // 才能启用「不可能旅行」判定。
+            fingerprint: fingerprint.as_deref().unwrap_or(""),
+            location,
+            // 生产环境可用已有 geo 库从 IP 回填坐标，才能启用「不可能旅行」判定。
             coords: None,
             signature: None,
             at: Some(NOW),

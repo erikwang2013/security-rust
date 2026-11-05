@@ -12,7 +12,14 @@ pub struct SessionGuard<S: SessionStore> {
 }
 
 impl<S: SessionStore> SessionGuard<S> {
+    /// 构造守卫。非有限或负数的 `impossible_travel_kmh` 会回落到默认 900.0：
+    /// NaN 会让 `kmh > max_kmh` 恒 false，静默关掉不可能旅行检测；负数则对
+    /// 任何坐标都报「不可能旅行」。`0.0` 是合法配置（任何移动都报）。
     pub fn new(store: S, config: SessionConfig) -> Self {
+        let mut config = config;
+        if !config.impossible_travel_kmh.is_finite() || config.impossible_travel_kmh < 0.0 {
+            config.impossible_travel_kmh = SessionConfig::default().impossible_travel_kmh;
+        }
         Self { store, config }
     }
 
@@ -24,6 +31,13 @@ impl<S: SessionStore> SessionGuard<S> {
     ///
     /// 登录本身总是成功（除非调用方误用或后端故障）—— 异地只影响 verdict，
     /// 由调用方决定是否走二次验证，不应阻断登录。
+    ///
+    /// `ctx.token` 必须是认证成功后新签发的值。与 [`Self::rotate`] 同一口径，
+    /// 指向一个在用会话（存在 && 未吊销 && 未过期）返回
+    /// [`SessionError::TokenInUse`]；已吊销 / 已过期的死记录可以覆盖。
+    /// 复用客户端提供的 token 就是 session fixation —— 本检查只挡住「覆盖在用
+    /// 会话」，挡不住「攻击者预先种下一个尚未使用的 token」，token 的来源仍须
+    /// 由调用方保证。
     pub fn bind(&self, ctx: &RequestContext, now: u64) -> Result<SessionVerdict, SessionError> {
         if ctx.token.is_empty() {
             return Err(SessionError::EmptyToken);
@@ -33,6 +47,15 @@ impl<S: SessionStore> SessionGuard<S> {
         }
         if ctx.fingerprint.is_empty() {
             return Err(SessionError::EmptyFingerprint);
+        }
+
+        // store.put 是无条件 upsert：不挡这一下，复用同一个 token 会静默顶掉
+        // 原会话（受害者下次 verify 读到的是新指纹 ⇒ 被动踢下线）。
+        if let Some(existing) = self.store.get(ctx.token)?
+            && !existing.revoked
+            && existing.expires_at > now
+        {
+            return Err(SessionError::TokenInUse);
         }
 
         // 坐标在信任边界校验一次：NaN / 越界一律降级为「没有坐标」，
@@ -212,6 +235,10 @@ impl<S: SessionStore> SessionGuard<S> {
     /// 的新 token 并卡进这个窄窗）。本 trait 没有条件写 / 事务，这个检查把
     /// 「必然覆盖」降级为「窄窗竞争」，仍然值得；要彻底关窗得加 `put_if_absent`
     /// 一类的原子原语。
+    ///
+    /// **写入顺序 fail-closed**：先吊销旧 token，再写新记录。`revoke` 失败时新
+    /// 记录不落库；`put` 失败时旧 token 已失效，用户需重新登录。两种故障都不会
+    /// 留下两个同时有效的 token。
     pub fn rotate(
         &self,
         old: &str,
@@ -242,6 +269,11 @@ impl<S: SessionStore> SessionGuard<S> {
             return Err(SessionError::TokenInUse);
         }
 
+        // 先吊销旧 token 再写新记录：反过来的话，revoke 失败会留下
+        // 「新 token 已生效、旧 token 未失效」的 fail-open 窗口。当前顺序下，
+        // revoke 失败不写新记录，put 失败则旧 token 已吊销（fail-closed），
+        // 两种故障都不会让两个 token 同时有效。
+        self.store.revoke(old)?;
         self.store.put(SessionRecord {
             token: new.to_string(),
             issued_at: now,
@@ -250,8 +282,6 @@ impl<S: SessionStore> SessionGuard<S> {
             revoked: false,
             ..record
         })?;
-        // 旧 token 立即失效
-        self.store.revoke(old)?;
 
         Ok(())
     }

@@ -4,7 +4,7 @@
 //! `verify` 的威胁判定在 `tests/session.rs`。
 
 use security_rust::session::{
-    Decision, MemoryStore, RequestContext, SessionConfig, SessionGuard, SessionThreat,
+    Decision, MemoryStore, RequestContext, SessionConfig, SessionError, SessionGuard, SessionThreat,
 };
 
 const NOW: u64 = 1_000_000;
@@ -117,6 +117,75 @@ fn bind_rejects_empty_fingerprint() {
         g.bind(&ctx("t1", "u1", ""), NOW).unwrap_err(),
         security_rust::session::SessionError::EmptyFingerprint
     );
+}
+
+#[test]
+fn bind_rejects_collision_with_live_token() {
+    // store.put 是无条件 upsert：不挡这一下，第二个 bind 会把原会话整个顶掉
+    let g = guard();
+    g.bind(&ctx("t1", "u1", FP), NOW).unwrap();
+
+    assert_eq!(
+        g.bind(&ctx("t1", "u2", "ATTACKER-FP"), NOW + 10)
+            .unwrap_err(),
+        SessionError::TokenInUse
+    );
+
+    // 原会话仍然可用；攻击者指纹仍然被拒
+    assert!(g.verify(&ctx("t1", "u1", FP), NOW + 20).is_allowed());
+    assert_eq!(
+        g.verify(&ctx("t1", "u2", "ATTACKER-FP"), NOW + 20).decision,
+        Decision::Block
+    );
+}
+
+#[test]
+fn bind_may_reuse_a_revoked_token() {
+    // 死记录不占坑：登出后留下的记录应可被下一次登录覆盖
+    let g = guard();
+    g.bind(&ctx("t", "u1", FP), NOW).unwrap();
+    g.revoke("t").unwrap();
+
+    g.bind(&ctx("t", "u2", "fp2"), NOW + 10).unwrap();
+    assert!(g.verify(&ctx("t", "u2", "fp2"), NOW + 20).is_allowed());
+}
+
+#[test]
+fn bind_may_reuse_an_expired_token() {
+    // expires_at == now 即已过期，与 verify 的 `expires_at <= now` 同口径
+    let g = guard();
+    g.bind(&ctx("t", "u1", FP), NOW).unwrap();
+
+    g.bind(&ctx("t", "u2", "fp2"), NOW + 3_600).unwrap();
+    assert!(g.verify(&ctx("t", "u2", "fp2"), NOW + 3_601).is_allowed());
+}
+
+#[test]
+fn invalid_impossible_travel_threshold_falls_back_to_default() {
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+        let g = SessionGuard::new(
+            MemoryStore::new(),
+            SessionConfig {
+                impossible_travel_kmh: bad,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            g.config().impossible_travel_kmh,
+            900.0,
+            "非法阈值 {bad} 必须回落到默认值"
+        );
+    }
+
+    // 0.0 是合法配置：任何移动都报
+    let g = SessionGuard::new(
+        MemoryStore::new(),
+        SessionConfig {
+            impossible_travel_kmh: 0.0,
+            ..Default::default()
+        },
+    );
+    assert_eq!(g.config().impossible_travel_kmh, 0.0);
 }
 
 // ── revoke_all ──────────────────────────────────────────────

@@ -96,12 +96,12 @@
   </g>
   <path d="M380 170 L398 134" stroke="#8F2A17" stroke-width="7" stroke-linecap="round"/>
   <rect x="352" y="72" width="104" height="64" rx="12" fill="#FFF6EC" stroke="#8F2A17" stroke-width="3"/>
-  <text x="404" y="110" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="30" font-weight="700" fill="#B3261E">!</text>
-  <text x="404" y="128" text-anchor="middle" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#7A6A5C">已上报</text>
+  <text x="404" y="110" text-anchor="middle" font-family="ui-monospace, 'Noto Sans Mono CJK SC', 'Source Han Mono SC', monospace" font-size="30" font-weight="700" fill="#B3261E">!</text>
+  <text x="404" y="128" text-anchor="middle" font-family="system-ui, 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif" font-size="13" fill="#7A6A5C">已上报</text>
 
   <!-- 铭牌 -->
-  <text x="36" y="408" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="26" font-weight="700" fill="#1F1B18">甲哨 Sentri</text>
-  <text x="36" y="432" font-family="system-ui, -apple-system, 'Noto Sans CJK SC', 'Source Han Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#7A6A5C">security-rust 项目宠物 · 只报告，不拦截</text>
+  <text x="36" y="408" font-family="system-ui, 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif" font-size="26" font-weight="700" fill="#1F1B18">甲哨 Sentri</text>
+  <text x="36" y="432" font-family="system-ui, 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif" font-size="13" fill="#7A6A5C">security-rust 项目宠物 · 只报告，不拦截</text>
   <rect x="336" y="388" width="112" height="26" rx="13" fill="#EDF7F1" stroke="#0E9F6E" stroke-width="1.5"/>
-  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, Menlo, Consolas, 'Noto Sans CJK SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text>
+  <text x="392" y="405" text-anchor="middle" font-family="ui-monospace, 'Noto Sans Mono CJK SC', 'Source Han Mono SC', monospace" font-size="12" fill="#0B7A55">deps: regex ×1</text>
 </svg>

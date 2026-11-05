@@ -371,7 +371,7 @@ let _ = throttle.record_failure(key, now);
 # Compilar
 cargo build --release
 
-# Pruebas (594: 445 unitarias, 148 de integración, 1 de documentación)
+# Pruebas (599: 445 unitarias, 153 de integración, 1 de documentación)
 cargo test
 
 # Ejemplo de canal de extremo a extremo (escaneo → limitación → sesión → acción)
@@ -389,7 +389,7 @@ Si este proyecto te ha resultado útil, eres bienvenido a apoyarlo con una donac
 
 | Alipay | WeChat Pay |
 |--------|---------|
-| ![Alipay](./alipay.png) | ![WeChat Pay](./weixinpay.png) |
+| ![Alipay](../../alipay.png) | ![WeChat Pay](../../weixinpay.png) |
 
 ### Transferencia global (transferencia internacional)
 

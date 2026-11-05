@@ -13,6 +13,10 @@ pub use store::{LoginPoint, MemoryStore, SessionRecord, SessionStore};
 #[derive(Debug, Clone)]
 pub struct RequestContext<'a> {
     /// 调用方签发的 token 值。`verify` 中为空 ⇒ `TokenUnknown`。
+    ///
+    /// **必须由服务端在认证成功后新签发，不能复用客户端提供的值** ——
+    /// 复用登录前的会话 ID 就是 session fixation：攻击者预先种下的 token
+    /// 在受害者登录后仍然有效。本库无从判断 token 的来源，只能由调用方保证。
     pub token: &'a str,
     /// 用户标识。**仅 `bind` 使用，`verify` 完全忽略它**：每请求校验的身份
     /// 一律取自服务端 [`SessionRecord`]（异地历史按 `record.subject` 聚合），
@@ -200,6 +204,9 @@ pub struct SessionConfig {
     /// 会话有效期（秒）。
     pub ttl_secs: u64,
     /// 不可能旅行的速度上限（km/h）。
+    ///
+    /// 必须有限且 `>= 0`（`0.0` 表示任何移动都报）。NaN / 负数 / 无穷会在
+    /// [`SessionGuard::new`](crate::session::SessionGuard::new) 时回落到默认 900.0。
     pub impossible_travel_kmh: f64,
     /// 请求自称时间与 `now` 的最大容忍偏离（秒）。
     pub timestamp_skew_secs: u64,
